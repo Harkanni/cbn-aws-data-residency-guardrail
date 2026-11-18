@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Region-lock guardrail console</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1c1c1a;--mu:#6b6a64;--bd:#e2e0d8;--ok:#2f6b1a;--okb:#e8f3df;--bad:#a32d2d;--badb:#fceaea;--wn:#8a5a0b;--wnb:#fbefd8;--ac:#3c3489;--acb:#eeedfe;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}
+h2{font-size:15px;font-weight:600;margin:0 0 10px}
+p{margin:0}.mu{color:var(--mu);font-size:13px}
+.banner{background:var(--acb);color:var(--ac);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
+.stat b{display:block;font-size:24px;font-weight:600;line-height:1.2}
+.grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+select,button{font:inherit;font-size:14px;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+select{flex:1;min-width:120px}
+button{cursor:pointer;text-align:left}
+button:hover{border-color:var(--mu)}
+button.go{background:var(--ac);color:var(--card);border-color:var(--ac);text-align:center}
+.btns{display:grid;gap:8px}
+.lbl{font-size:12px;color:var(--mu);margin:12px 0 6px;text-transform:none}
+.chip{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 7px;letter-spacing:.02em;white-space:nowrap}
+.c-ok{background:var(--okb);color:var(--ok)}.c-bad{background:var(--badb);color:var(--bad)}.c-wn{background:var(--wnb);color:var(--wn)}.c-ne{background:var(--bd);color:var(--mu)}
+.rule{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--bd)}
+.rule:first-of-type{border-top:0}
+.rule code{font-size:12.5px;word-break:break-all}
+ul{list-style:none;margin:0;padding:0;max-height:360px;overflow:auto}
+li{padding:9px 0;border-top:1px solid var(--bd);font-size:13.5px}
+li:first-child{border-top:0}
+li small{display:block;color:var(--mu);font-size:12px;margin-top:3px;word-break:break-word}
+.mail{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px}
+.mail pre{margin:6px 0 0;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--mu)}
+.empty{color:var(--mu);font-size:13px}
+@media (max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Region-lock guardrail console</h1>
+  <p class="mu">Approved region: <b>af-south-1</b> · single AWS account 1111-2222-3333 · guardrail role with 2 deny policies</p>
+  <div class="banner">Simulation. No AWS calls are made. Each result mirrors what AWS returns for the Terraform build, so you can walk through the demo before capturing real screenshots. af-south-1 (Cape Town) is not inside Nigeria, so this shows the guardrail pattern, not CBN compliance. Without AWS Organizations, the region lock binds the guardrail role only; the bucket policy binds every identity, admins included.</div>
+
+  <div class="stats">
+    <div class="stat"><b id="sDen">0</b><span class="mu">Actions denied</span></div>
+    <div class="stat"><b id="sOk">0</b><span class="mu">Actions allowed</span></div>
+    <div class="stat"><b id="sCmp">4/4</b><span class="mu">Config rules compliant</span></div>
+    <div class="stat"><b id="sAl">0</b><span class="mu">Alert emails sent</span></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>1. Region lock (guardrail role)</h2>
+        <p class="mu">Try to create something in any region.</p>
+        <div class="row" style="margin-top:10px">
+          <select id="svc" aria-label="Service">
+            <option value="ec2">EC2 instance</option><option value="s3">S3 bucket</option><option value="kms">KMS key</option><option value="rds">RDS database</option><option value="lam">Lambda function</option>
+          </select>
+          <select id="reg" aria-label="Region">
+            <option value="us-east-1">us-east-1 (N. Virginia)</option><option value="eu-west-1">eu-west-1 (Ireland)</option><option value="ap-southeast-1">ap-southeast-1 (Singapore)</option><option value="af-south-1">af-south-1 (Cape Town)</option>
+          </select>
+        </div>
+        <button class="go" id="run" style="width:100%">Create resource</button>
+      </div>
+
+      <div class="card">
+        <h2>2. Data guardrails (bucket policy and role policy)</h2>
+        <div class="btns">
+          <button data-t="upOk">Upload receipt encrypted with our KMS key</button>
+          <button data-t="upS3">Upload receipt with SSE-S3 (AES256)</button>
+          <button data-t="upKey">Upload with a different KMS key</button>
+          <button data-t="upHttp">Upload over plain HTTP</button>
+          <button data-t="repl">Add replication rule to a us-east-1 bucket</button>
+          <button data-t="mrk">Create a multi-Region KMS key</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3. Simulate drift as an admin</h2>
+        <p class="mu">Preventive policies don’t stop these changes, so AWS Config has to catch them.</p>
+        <div class="btns" style="margin-top:10px">
+          <button data-d="enc">Remove default encryption from the bucket</button>
+          <button data-d="ssl">Delete the bucket policy</button>
+          <button data-d="pub">Turn off Block Public Access</button>
+          <button data-d="rot">Turn off KMS key rotation</button>
+          <button data-d="fix" class="go">Run terraform apply (fix drift)</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card"><h2>AWS Config rules</h2><div id="rules"></div></div>
+      <div class="card"><h2>Alert inbox</h2><div id="mail"><p class="empty">No alerts yet. Try a replication attempt or some drift.</p></div></div>
+      <div class="card"><h2>Event log</h2><ul id="log"></ul></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var P='assumed-role/region-lock-demo-operator/demo';
+var BUCKET='region-lock-demo-payments-111122223333';
+var RULES=[['enc','s3-default-encryption-kms'],['ssl','s3-bucket-ssl-requests-only'],['pub','s3-bucket-level-public-access-prohibited'],['rot','cmk-backing-key-rotation-enabled']];
+var SVC={ec2:['EC2 instance','ec2:RunInstances','UnauthorizedOperation'],s3:['S3 bucket','s3:CreateBucket','AccessDenied'],kms:['KMS key','kms:CreateKey','AccessDeniedException'],rds:['RDS database','rds:CreateDBInstance','AccessDenied'],lam:['Lambda function','lambda:CreateFunction','AccessDeniedException']};
+var DRIFT={enc:'Default encryption removed from payments bucket',ssl:'Bucket policy deleted (also removes the KMS and HTTPS deny rules)',pub:'Block Public Access turned off',rot:'Automatic rotation turned off on the KMS key'};
+var st={den:0,ok:0,al:0,policy:true,rules:{enc:1,ssl:1,pub:1,rot:1},pend:{}};
+var $=function(i){return document.getElementById(i)};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function t(){return new Date().toLocaleTimeString([], {hour12:false})}
+function log(kind,title,detail){
+  var c={deny:['DENIED','c-bad'],ok:['ALLOWED','c-ok'],alert:['ALERT','c-wn'],info:['INFO','c-ne']}[kind];
+  var li=document.createElement('li');
+  li.innerHTML='<span class="chip '+c[1]+'">'+c[0]+'</span> '+esc(title)+' <span class="mu">· '+t()+'</span>'+(detail?'<small>'+esc(detail)+'</small>':'');
+  $('log').insertBefore(li,$('log').firstChild);
+}
+function deny(title,msg){st.den++;log('deny',title,msg);render()}
+function allow(title,msg){st.ok++;log('ok',title,msg);render()}
+function scp(action,n){return 'User: '+P+' is not authorized to perform: '+action+' with an explicit deny in an identity-based policy (guardrail policy '+n+')'}
+function bp(action,sid){return 'User: '+P+' is not authorized to perform: '+action+' on '+BUCKET+' with an explicit deny in a resource-based policy (statement '+sid+')'}
+function email(subject,body){
+  st.al++;
+  var d=document.createElement('div');d.className='mail';
+  d.innerHTML='<b>'+esc(subject)+'</b><div class="mu">AWS Notifications · '+t()+'</div><pre>'+esc(body)+'</pre>';
+  var m=$('mail');if(m.querySelector('.empty'))m.innerHTML='';
+  m.insertBefore(d,m.firstChild);
+  log('alert','Email sent: '+subject);render();
+}
+function render(){
+  $('sDen').textContent=st.den;$('sOk').textContent=st.ok;$('sAl').textContent=st.al;
+  var n=0,h='';
+  RULES.forEach(function(r){
+    var good=st.rules[r[0]],pend=st.pend[r[0]];
+    if(good&&!pend)n++;
+    var chip=pend?'<span class="chip c-ne">EVALUATING</span>':good?'<span class="chip c-ok">COMPLIANT</span>':'<span class="chip c-bad">NON_COMPLIANT</span>';
+    h+='<div class="rule"><code>'+r[1]+'</code>'+chip+'</div>';
+  });
+  $('rules').innerHTML=h;$('sCmp').textContent=n+'/4';
+}
+$('run').onclick=function(){
+  var s=SVC[$('svc').value],r=$('reg').value,what=s[0]+' in '+r;
+  if(r!=='af-south-1')deny('Create '+what,s[2]+': '+scp(s[1],1));
+  else allow('Create '+what,'Request succeeded in the approved region.');
+};
+var T={
+  upOk:function(){allow('Upload receipt-002.json (SSE-KMS, our key)','PutObject succeeded; object encrypted with alias/region-lock-demo-payments.')},
+  upS3:function(){st.policy?deny('Upload with SSE-S3',bp('s3:PutObject','DenyNonKmsEncryption')):allow('Upload with SSE-S3','Succeeded, but the object is not under your key. The guardrail is gone.')},
+  upKey:function(){st.policy?deny('Upload with a different KMS key',bp('s3:PutObject','DenyWrongKmsKey')):allow('Upload with a different KMS key','Succeeded with a key outside your control. The guardrail is gone.')},
+  upHttp:function(){st.policy?deny('Upload over plain HTTP',bp('s3:PutObject','DenyNonTLS')):allow('Upload over plain HTTP','Succeeded unencrypted in transit. The guardrail is gone.')},
+  repl:function(){
+    deny('PutBucketReplication to a us-east-1 bucket','AccessDenied: '+bp('s3:PutReplicationConfiguration','DenyReplicationChanges'));
+    email('Replication change attempted on payments bucket','EventBridge rule matched: PutBucketReplication\nprincipal: '+P+'\nbucket: '+BUCKET+'\ndestination region: us-east-1\nresult: AccessDenied (bucket policy)');
+  },
+  mrk:function(){deny('Create multi-Region KMS key','AccessDeniedException: '+scp('kms:CreateKey',2))}
+};
+document.querySelectorAll('[data-t]').forEach(function(b){b.onclick=T[b.dataset.t]});
+document.querySelectorAll('[data-d]').forEach(function(b){b.onclick=function(){drift(b.dataset.d)}});
+function drift(k){
+  if(k==='fix'){
+    RULES.forEach(function(r){st.rules[r[0]]=1;st.pend[r[0]]=1});st.policy=true;
+    allow('terraform apply','Drift corrected: encryption, bucket policy, Block Public Access and key rotation restored.');
+    setTimeout(function(){st.pend={};log('info','Config re-evaluated all rules: 4/4 COMPLIANT');render()},1200);
+    return;
+  }
+  if(!st.rules[k])return;
+  st.rules[k]=0;st.pend[k]=1;if(k==='ssl')st.policy=false;
+  allow('Admin change: '+DRIFT[k],'Permitted: the guardrail policies only restrict regions and replication. Config will evaluate it.');
+  setTimeout(function(){
+    delete st.pend[k];render();
+    var name=RULES.filter(function(r){return r[0]===k})[0][1];
+    email('Config rule NON_COMPLIANT: '+name,'detail-type: Config Rules Compliance Change\nrule: '+name+'\nresource: '+(k==='rot'?'KMS key alias/region-lock-demo-payments':BUCKET)+'\nnewEvaluationResult: NON_COMPLIANT');
+  },1200);
+}
+log('info','terraform apply complete','Guardrail role and policies, key, bucket, Config recorder and alert rules deployed in af-south-1.');
+render();
+</script>
+</body>
+</html>

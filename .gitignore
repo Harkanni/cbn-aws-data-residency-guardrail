@@ -1,0 +1,22 @@
+# Local .terraform directories and state files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+
+# Logs and CLI configuration
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc
+
+# Sensitive and local override files
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+trash/
+files.zip
+probe-lambda.zip

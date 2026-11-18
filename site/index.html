@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Region-lock guardrail console (live)</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1c1c1a;--mu:#6b6a64;--bd:#e2e0d8;--ok:#2f6b1a;--okb:#e8f3df;--bad:#a32d2d;--badb:#fceaea;--wn:#8a5a0b;--wnb:#fbefd8;--ac:#3c3489;--acb:#eeedfe;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}
+h2{font-size:15px;font-weight:600;margin:0 0 10px}
+p{margin:0}.mu{color:var(--mu);font-size:13px}
+.banner{background:var(--acb);color:var(--ac);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
+.stat b{display:block;font-size:24px;font-weight:600;line-height:1.2}
+.grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+select,button{font:inherit;font-size:14px;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+select{flex:1;min-width:120px}
+button{cursor:pointer;text-align:left}
+button:hover{border-color:var(--mu)}
+button.go{background:var(--ac);color:var(--card);border-color:var(--ac);text-align:center}
+.btns{display:grid;gap:8px}
+.lbl{font-size:12px;color:var(--mu);margin:12px 0 6px;text-transform:none}
+.chip{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 7px;letter-spacing:.02em;white-space:nowrap}
+.c-ok{background:var(--okb);color:var(--ok)}.c-bad{background:var(--badb);color:var(--bad)}.c-wn{background:var(--wnb);color:var(--wn)}.c-ne{background:var(--bd);color:var(--mu)}
+.rule{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--bd)}
+.rule:first-of-type{border-top:0}
+.rule code{font-size:12.5px;word-break:break-all}
+ul{list-style:none;margin:0;padding:0;max-height:360px;overflow:auto}
+li{padding:9px 0;border-top:1px solid var(--bd);font-size:13.5px}
+li:first-child{border-top:0}
+li small{display:block;color:var(--mu);font-size:12px;margin-top:3px;word-break:break-word}
+.mail{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px}
+.mail pre{margin:6px 0 0;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--mu)}
+.empty{color:var(--mu);font-size:13px}
+@media (max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}.kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--bd);font-size:13.5px}.kv:first-of-type{border-top:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Region-lock guardrail console <span class="chip c-ok">LIVE</span></h1>
+  <p class="mu" id="hdr">Connecting to AWS…</p>
+  <div class="banner">Live mode. Every button triggers a real AWS API call against the demo account, and every result below is AWS’s own response. Nothing is simulated. af-south-1 (Cape Town) is not inside Nigeria, so this shows the guardrail pattern, not CBN compliance.</div>
+  <div class="stats">
+    <div class="stat"><b id="sDen">0</b><span class="mu">Denied by AWS</span></div>
+    <div class="stat"><b id="sOk">0</b><span class="mu">Allowed by AWS</span></div>
+    <div class="stat"><b id="sCmp">–</b><span class="mu">Config rules compliant</span></div>
+    <div class="stat"><b id="sAl">–</b><span class="mu">Alert rules fired (24h)</span></div>
+  </div>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>1. Region lock (operator role)</h2>
+        <p class="mu">Runs a real API call as the guardrail role. EC2 uses a dry run, S3 creates then deletes a bucket.</p>
+        <div class="row" style="margin-top:10px">
+          <select id="svc" aria-label="Service"><option value="ec2">EC2: create VPC (dry run)</option><option value="s3">S3: create bucket</option><option value="kms">KMS: list keys</option><option value="lambda">Lambda: list functions</option><option value="rds">RDS: list instances</option></select>
+          <select id="reg" aria-label="Region"><option value="us-east-1">us-east-1 (N. Virginia)</option><option value="eu-west-1">eu-west-1 (Ireland)</option><option value="ap-southeast-1">ap-southeast-1 (Singapore)</option><option value="af-south-1">af-south-1 (Cape Town)</option></select>
+        </div>
+        <button class="go" id="probe" style="width:100%">Run API call</button>
+      </div>
+      <div class="card">
+        <h2>2. Data guardrails</h2>
+        <div class="btns">
+          <button data-a="upOk">Upload receipt encrypted with our KMS key</button>
+          <button data-a="upS3">Upload receipt with SSE-S3 (AES256)</button>
+          <button data-a="upKey">Upload with the AWS-managed S3 key instead</button>
+          <button data-a="upHttp">Upload over plain HTTP</button>
+          <button data-a="repl">Add a replication rule (operator role)</button>
+          <button data-a="replAdmin" id="replAdmin">Add a replication rule (your admin identity)</button>
+          <button data-a="mrk">Create a multi-Region KMS key (operator role)</button>
+        </div>
+      </div>
+      <div class="card" id="driftCard">
+        <h2>3. Real drift as an admin</h2>
+        <p class="mu">These change your real resources. Config should flag them within minutes.</p>
+        <div class="btns" style="margin-top:10px">
+          <button data-a="enc">Remove default encryption from the bucket</button>
+          <button data-a="ssl">Delete the bucket policy</button>
+          <button data-a="pub">Turn off Block Public Access</button>
+          <button data-a="rot">Turn off KMS key rotation</button>
+          <button data-a="fix" class="go">Run terraform apply (fix drift)</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card"><h2>AWS Config rules (live)</h2><div id="rules"><p class="empty">Loading…</p></div><p class="mu" style="margin-top:8px">Config re-evaluates a few minutes after a change. <a href="#" id="ref">Refresh now</a></p></div>
+      <div class="card"><h2>Live resource configuration</h2><div id="cfg"><p class="empty">Loading…</p></div></div>
+      <div class="card"><h2>Alert path</h2><div id="alerts"><p class="empty">Loading…</p></div></div>
+      <div class="card"><h2>Event log (real AWS responses)</h2><ul id="log"></ul></div>
+    </div>
+  </div>
+</div>
+<script>
+var TOK=new URLSearchParams(location.search).get('t')||'',den=0,ok=0,busy=false;
+var $=function(i){return document.getElementById(i)};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function t(){return new Date().toLocaleTimeString([],{hour12:false})}
+function api(p,b){return fetch(p,{method:b?'POST':'GET',headers:{'X-Token':TOK,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
+function chip(c,s){return '<span class="chip '+c+'">'+s+'</span>'}
+function log(title,r){
+  var c={denied:['c-bad','DENIED'],allowed:['c-ok','ALLOWED'],error:['c-wn','ERROR']}[r.verdict]||['c-wn','ERROR'];
+  var li=document.createElement('li');
+  li.innerHTML=chip(c[0],c[1])+' '+esc(title)+' <span class="mu">· '+t()+(r.who?' · as '+r.who:'')+'</span>'+(r.cmd?'<small class="cmd">$ '+esc(r.cmd)+'</small>':'')+'<small>'+esc(r.detail||'')+'</small>';
+  $('log').insertBefore(li,$('log').firstChild);
+  $('sDen').textContent=den;$('sOk').textContent=ok;
+}
+function run(body,title){
+  if(busy)return;busy=true;document.body.classList.add('busy');
+  var li=document.createElement('li');li.innerHTML=chip('c-ne','RUNNING')+' '+esc(title)+'…';$('log').insertBefore(li,$('log').firstChild);
+  api('/api/run',body).then(function(r){
+    if(r.error)r={verdict:'error',detail:r.error};
+    if(r.verdict==='denied')den++;if(r.verdict==='allowed')ok++;
+    li.remove();log(title,r);
+  }).catch(function(e){li.remove();log(title,{verdict:'error',detail:String(e)})}).then(function(){busy=false;document.body.classList.remove('busy');refresh()});
+}
+function refresh(){
+  api('/api/status').then(function(s){
+    if(s.error){$('hdr').textContent='Status error: '+s.error;return}
+    if(s.mode==='public'){$('driftCard').style.display='none';$('replAdmin').style.display='none'}
+    $('hdr').textContent='Account '+s.account+' · approved region '+s.region+' · bucket '+s.bucket;
+    var good=s.rules.filter(function(r){return r.status==='COMPLIANT'}).length;
+    $('sCmp').textContent=good+'/'+s.rules.length;
+    $('sAl').textContent=s.fired.replication+s.fired.config;
+    $('rules').innerHTML=s.rules.length?s.rules.map(function(r){var c=r.status==='COMPLIANT'?'c-ok':r.status==='NON_COMPLIANT'?'c-bad':'c-ne';return '<div class="rule"><code>'+esc(r.name)+'</code>'+chip(c,r.status)+'</div>'}).join(''):'<p class="empty">No rules evaluated yet.</p>';
+    $('cfg').innerHTML=s.config.map(function(k){return '<div class="kv"><span>'+k.label+'</span><span>'+esc(k.value)+' '+chip(k.ok?'c-ok':'c-bad',k.ok?'OK':'CHANGED')+'</span></div>'}).join('');
+    $('alerts').innerHTML=(s.subs.length?s.subs.map(function(u){return '<div class="kv"><span>'+esc(u.endpoint)+'</span>'+chip(u.confirmed?'c-ok':'c-wn',u.confirmed?'CONFIRMED':'PENDING CONFIRMATION')+'</div>'}).join(''):'<p class="empty">No SNS subscription found.</p>')
+      +'<div class="kv"><span>Replication rule fired (24h)</span><b>'+s.fired.replication+'</b></div><div class="kv"><span>Config rule fired (24h)</span><b>'+s.fired.config+'</b></div><p class="mu" style="margin-top:8px">Counts come from CloudWatch and lag a few minutes. The email itself arrives in your real inbox.</p>';
+  }).catch(function(e){$('hdr').textContent='Cannot reach the local server: '+e});
+}
+$('probe').onclick=function(){var s=$('svc'),r=$('reg');run({action:'probe',service:s.value,region:r.value},s.options[s.selectedIndex].text+' in '+r.value)};
+document.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){run({action:b.dataset.a},b.textContent)}});
+$('ref').onclick=function(e){e.preventDefault();refresh()};
+refresh();setInterval(function(){if(!busy&&!document.hidden)refresh()},30000);
+</script>
+</body>
+</html>

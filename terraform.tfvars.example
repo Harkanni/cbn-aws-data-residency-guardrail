@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and fill in.
+alert_email = "you@example.com"
+
+# Optional overrides
+# approved_region = "af-south-1"
+# name_prefix     = "region-lock-demo"

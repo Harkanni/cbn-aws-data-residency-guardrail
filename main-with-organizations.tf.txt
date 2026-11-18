@@ -1,0 +1,638 @@
+# ---------------------------------------------------------------------------
+# Region-Lock Guardrail Demo (AWS Organizations + S3 + KMS + Config + alerts)
+#
+# What this builds
+#   Management account : 2 Service Control Policies attached to ONE member account
+#                        (1) deny everything outside the approved region
+#                        (2) deny S3 replication / multi-Region access points / multi-Region KMS keys
+#   Member account     : KMS customer managed key (single-Region, rotation on)
+#                        S3 "payments" bucket (private, versioned, SSE-KMS enforced by policy)
+#                        AWS Config recorder + 4 managed rules
+#                        SNS email topic + 2 EventBridge rules (replication change, Config NON_COMPLIANT)
+#
+# NOTE: af-south-1 (Cape Town) is NOT inside Nigeria. This demonstrates a region-lock
+# guardrail pattern, not CBN compliance. Change var.approved_region to re-point it.
+#
+# Prerequisites (one-off, console)
+#   1. AWS Organizations is enabled and "Service control policies" is enabled on the root.
+#   2. You already have a MEMBER account (not the management account - SCPs do not apply to it).
+#   3. The approved region is enabled in that member account (opt-in region; wait until Enabled).
+#   4. Run Terraform with MANAGEMENT account credentials; the member account must have a
+#      role you can assume (default: OrganizationAccountAccessRole).
+#   5. The member account has no existing AWS Config recorder in the approved region
+#      (only one recorder per region is allowed).
+#
+# Usage
+#   terraform init
+#   terraform apply \
+#     -var member_account_id=111122223333 \
+#     -var alert_email=you@example.com
+#   Then CONFIRM the subscription email AWS sends, or no alerts will arrive.
+#
+# Cost: KMS key ~$1/month, Config bills per recorded item. Run `terraform destroy` when done
+# (the KMS key has a 7-day deletion window).
+# ---------------------------------------------------------------------------
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+# ------------------------------- Variables ---------------------------------
+
+variable "management_region" {
+  description = "Region used for the Organizations API (it is served from us-east-1)."
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "approved_region" {
+  description = "The only region the member account may use."
+  type        = string
+  default     = "af-south-1"
+}
+
+variable "member_account_id" {
+  description = "12-digit ID of the existing member account the guardrails apply to."
+  type        = string
+}
+
+variable "member_role_name" {
+  description = "Role in the member account that Terraform assumes."
+  type        = string
+  default     = "OrganizationAccountAccessRole"
+}
+
+variable "alert_email" {
+  description = "Email address that receives guardrail alerts."
+  type        = string
+}
+
+variable "name_prefix" {
+  description = "Prefix for resource names (lowercase letters, digits, hyphens)."
+  type        = string
+  default     = "region-lock-demo"
+}
+
+# ------------------------------- Providers ---------------------------------
+
+# Default provider = management account (Organizations / SCPs)
+provider "aws" {
+  region = var.management_region
+}
+
+# Member account, locked to the approved region
+provider "aws" {
+  alias  = "member"
+  region = var.approved_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::${var.member_account_id}:role/${var.member_role_name}"
+  }
+}
+
+data "aws_caller_identity" "member" {
+  provider = aws.member
+}
+
+locals {
+  account_id = data.aws_caller_identity.member.account_id
+
+  payments_bucket_name = "${var.name_prefix}-payments-${local.account_id}"
+  config_bucket_name   = "${var.name_prefix}-config-${local.account_id}"
+}
+
+# ===========================================================================
+# 1. SERVICE CONTROL POLICIES (management account)
+# ===========================================================================
+
+# SCP 1: deny any action outside the approved region.
+# Based on AWS's sample region-deny policy; global services are exempted via NotAction.
+# kms:* and config:* are deliberately NOT exempted so keys and Config are region-locked too.
+resource "aws_organizations_policy" "region_lock" {
+  name        = "${var.name_prefix}-deny-outside-approved-region"
+  description = "Deny all actions outside ${var.approved_region} except global services"
+  type        = "SERVICE_CONTROL_POLICY"
+
+  content = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DenyAllOutsideApprovedRegion"
+        Effect = "Deny"
+        NotAction = [
+          "a4b:*", "acm:*", "aws-marketplace-management:*", "aws-marketplace:*",
+          "aws-portal:*", "budgets:*", "ce:*", "chime:*", "cloudfront:*", "cur:*",
+          "directconnect:*", "ec2:DescribeRegions", "ec2:DescribeTransitGateways",
+          "ec2:DescribeVpnGateways", "fms:*", "globalaccelerator:*", "health:*",
+          "iam:*", "importexport:*", "mobileanalytics:*", "networkmanager:*",
+          "organizations:*", "pricing:*", "route53:*", "route53domains:*",
+          "s3:GetAccountPublic*", "s3:ListAllMyBuckets", "s3:PutAccountPublic*",
+          "shield:*", "sts:*", "support:*", "trustedadvisor:*",
+          "waf-regional:*", "waf:*", "wafv2:*", "wellarchitected:*"
+        ]
+        Resource = "*"
+        Condition = {
+          StringNotEquals = {
+            "aws:RequestedRegion" = [var.approved_region]
+          }
+        }
+      }
+    ]
+  })
+}
+
+# SCP 2: block the main routes for moving data across regions.
+resource "aws_organizations_policy" "no_replication" {
+  name        = "${var.name_prefix}-deny-replication-and-multiregion"
+  description = "Deny S3 replication, S3 multi-Region access points and multi-Region KMS keys"
+  type        = "SERVICE_CONTROL_POLICY"
+
+  content = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DenyS3ReplicationAndMultiRegionAccessPoints"
+        Effect = "Deny"
+        Action = [
+          "s3:PutReplicationConfiguration",
+          "s3:CreateMultiRegionAccessPoint"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "DenyMultiRegionKmsKeys"
+        Effect   = "Deny"
+        Action   = ["kms:CreateKey", "kms:ReplicateKey"]
+        Resource = "*"
+        Condition = {
+          Bool = { "kms:MultiRegion" = "true" }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_organizations_policy_attachment" "region_lock" {
+  policy_id = aws_organizations_policy.region_lock.id
+  target_id = var.member_account_id
+}
+
+resource "aws_organizations_policy_attachment" "no_replication" {
+  policy_id = aws_organizations_policy.no_replication.id
+  target_id = var.member_account_id
+}
+
+# ===========================================================================
+# 2. KMS CUSTOMER MANAGED KEY (member account)
+# ===========================================================================
+
+resource "aws_kms_key" "payments" {
+  provider                = aws.member
+  description             = "CMK for the simulated payments bucket (single-Region)"
+  enable_key_rotation     = true
+  multi_region            = false # key material stays in ${var.approved_region}
+  deletion_window_in_days = 7
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableIAMPolicies"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_alias" "payments" {
+  provider      = aws.member
+  name          = "alias/${var.name_prefix}-payments"
+  target_key_id = aws_kms_key.payments.key_id
+}
+
+# ===========================================================================
+# 3. S3 PAYMENTS BUCKET (member account)
+# ===========================================================================
+
+resource "aws_s3_bucket" "payments" {
+  provider      = aws.member
+  bucket        = local.payments_bucket_name
+  force_destroy = true # demo only
+}
+
+resource "aws_s3_bucket_public_access_block" "payments" {
+  provider                = aws.member
+  bucket                  = aws_s3_bucket.payments.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "payments" {
+  provider = aws.member
+  bucket   = aws_s3_bucket.payments.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "payments" {
+  provider = aws.member
+  bucket   = aws_s3_bucket.payments.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.payments.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_policy" "payments" {
+  provider = aws.member
+  bucket   = aws_s3_bucket.payments.id
+
+  # Applied after the public-access block to avoid concurrent-modification errors.
+  depends_on = [aws_s3_bucket_public_access_block.payments]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.payments.arn,
+          "${aws_s3_bucket.payments.arn}/*"
+        ]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      },
+      {
+        # If a request states an encryption type, it must be KMS.
+        Sid       = "DenyNonKmsEncryption"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.payments.arn}/*"
+        Condition = {
+          StringNotEqualsIfExists = { "s3:x-amz-server-side-encryption" = "aws:kms" }
+        }
+      },
+      {
+        # If a request names a KMS key, it must be OUR key. (Requests naming no key fall
+        # through to the bucket default, which is our key.)
+        Sid       = "DenyWrongKmsKey"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.payments.arn}/*"
+        Condition = {
+          StringNotEqualsIfExists = {
+            "s3:x-amz-server-side-encryption-aws-kms-key-id" = aws_kms_key.payments.arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+# A fake receipt so the screenshot of "encrypted with our own key" has something to show.
+resource "aws_s3_object" "sample_receipt" {
+  provider               = aws.member
+  bucket                 = aws_s3_bucket.payments.id
+  key                    = "receipts/receipt-001.json"
+  content_type           = "application/json"
+  server_side_encryption = "aws:kms"
+  kms_key_id             = aws_kms_key.payments.arn
+
+  content = jsonencode({
+    receipt_id = "receipt-001"
+    amount     = 15000
+    currency   = "NGN"
+    note       = "SIMULATED DATA - not a real transaction"
+  })
+
+  depends_on = [aws_s3_bucket_policy.payments]
+}
+
+# ===========================================================================
+# 4. ALERTING: SNS + EVENTBRIDGE (member account)
+# ===========================================================================
+
+resource "aws_sns_topic" "alerts" {
+  provider = aws.member
+  name     = "${var.name_prefix}-guardrail-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  provider  = aws.member
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email # you must click the confirmation link in your inbox
+}
+
+# Fires on ANY attempt to change bucket replication (CloudTrail management event).
+# Matches regardless of errorCode, so a denied attempt should still alert; verify in
+# CloudTrail event history if it does not arrive.
+resource "aws_cloudwatch_event_rule" "replication_change" {
+  provider    = aws.member
+  name        = "${var.name_prefix}-replication-change"
+  description = "Alert when S3 bucket replication is changed or attempted"
+
+  event_pattern = jsonencode({
+    source        = ["aws.s3"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["s3.amazonaws.com"]
+      eventName   = ["PutBucketReplication"]
+    }
+  })
+}
+
+# Fires when any Config rule evaluates a resource as NON_COMPLIANT.
+resource "aws_cloudwatch_event_rule" "config_noncompliant" {
+  provider    = aws.member
+  name        = "${var.name_prefix}-config-noncompliant"
+  description = "Alert when an AWS Config rule reports NON_COMPLIANT"
+
+  event_pattern = jsonencode({
+    source        = ["aws.config"]
+    "detail-type" = ["Config Rules Compliance Change"]
+    detail = {
+      newEvaluationResult = {
+        complianceType = ["NON_COMPLIANT"]
+      }
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "replication_to_sns" {
+  provider = aws.member
+  rule     = aws_cloudwatch_event_rule.replication_change.name
+  arn      = aws_sns_topic.alerts.arn
+}
+
+resource "aws_cloudwatch_event_target" "config_to_sns" {
+  provider = aws.member
+  rule     = aws_cloudwatch_event_rule.config_noncompliant.name
+  arn      = aws_sns_topic.alerts.arn
+}
+
+resource "aws_sns_topic_policy" "alerts" {
+  provider = aws.member
+  arn      = aws_sns_topic.alerts.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowEventBridgePublish"
+        Effect    = "Allow"
+        Principal = { Service = "events.amazonaws.com" }
+        Action    = "sns:Publish"
+        Resource  = aws_sns_topic.alerts.arn
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+        }
+      }
+    ]
+  })
+}
+
+# ===========================================================================
+# 5. AWS CONFIG (member account)
+# ===========================================================================
+
+resource "aws_s3_bucket" "config_logs" {
+  provider      = aws.member
+  bucket        = local.config_bucket_name
+  force_destroy = true # demo only
+}
+
+resource "aws_s3_bucket_public_access_block" "config_logs" {
+  provider                = aws.member
+  bucket                  = aws_s3_bucket.config_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "config_logs" {
+  provider   = aws.member
+  bucket     = aws_s3_bucket.config_logs.id
+  depends_on = [aws_s3_bucket_public_access_block.config_logs]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AWSConfigBucketPermissionsCheck"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = ["s3:GetBucketAcl", "s3:ListBucket"]
+        Resource  = aws_s3_bucket.config_logs.arn
+        Condition = { StringEquals = { "AWS:SourceAccount" = local.account_id } }
+      },
+      {
+        Sid       = "AWSConfigBucketDelivery"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.config_logs.arn}/AWSLogs/${local.account_id}/Config/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"      = "bucket-owner-full-control"
+            "AWS:SourceAccount" = local.account_id
+          }
+        }
+      },
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.config_logs.arn,
+          "${aws_s3_bucket.config_logs.arn}/*"
+        ]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "config" {
+  provider = aws.member
+  name     = "${var.name_prefix}-config-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "config_managed" {
+  provider   = aws.member
+  role       = aws_iam_role.config.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
+}
+
+resource "aws_iam_role_policy" "config_delivery" {
+  provider = aws.member
+  name     = "config-s3-delivery"
+  role     = aws_iam_role.config.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:PutObjectAcl", "s3:GetBucketAcl"]
+        Resource = [aws_s3_bucket.config_logs.arn, "${aws_s3_bucket.config_logs.arn}/*"]
+      }
+    ]
+  })
+}
+
+resource "aws_config_configuration_recorder" "this" {
+  provider = aws.member
+  name     = "${var.name_prefix}-recorder"
+  role_arn = aws_iam_role.config.arn
+
+  recording_group {
+    all_supported = true
+  }
+}
+
+resource "aws_config_delivery_channel" "this" {
+  provider       = aws.member
+  name           = "${var.name_prefix}-channel"
+  s3_bucket_name = aws_s3_bucket.config_logs.bucket
+
+  depends_on = [
+    aws_config_configuration_recorder.this,
+    aws_s3_bucket_policy.config_logs,
+    aws_iam_role_policy.config_delivery
+  ]
+}
+
+resource "aws_config_configuration_recorder_status" "this" {
+  provider   = aws.member
+  name       = aws_config_configuration_recorder.this.name
+  is_enabled = true
+
+  depends_on = [aws_config_delivery_channel.this]
+}
+
+# --- Managed rules. The three S3 rules are scoped to the payments bucket only, so the
+# --- Config log bucket (which uses default SSE-S3) does not show up as NON_COMPLIANT.
+
+resource "aws_config_config_rule" "s3_kms_default_encryption" {
+  provider = aws.member
+  name     = "${var.name_prefix}-s3-default-encryption-kms"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_DEFAULT_ENCRYPTION_KMS"
+  }
+
+  scope {
+    compliance_resource_types = ["AWS::S3::Bucket"]
+    compliance_resource_id    = aws_s3_bucket.payments.id
+  }
+
+  depends_on = [aws_config_configuration_recorder_status.this]
+}
+
+resource "aws_config_config_rule" "s3_ssl_only" {
+  provider = aws.member
+  name     = "${var.name_prefix}-s3-ssl-requests-only"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_SSL_REQUESTS_ONLY"
+  }
+
+  scope {
+    compliance_resource_types = ["AWS::S3::Bucket"]
+    compliance_resource_id    = aws_s3_bucket.payments.id
+  }
+
+  depends_on = [aws_config_configuration_recorder_status.this]
+}
+
+resource "aws_config_config_rule" "s3_no_public" {
+  provider = aws.member
+  name     = "${var.name_prefix}-s3-public-access-prohibited"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_LEVEL_PUBLIC_ACCESS_PROHIBITED"
+  }
+
+  scope {
+    compliance_resource_types = ["AWS::S3::Bucket"]
+    compliance_resource_id    = aws_s3_bucket.payments.id
+  }
+
+  depends_on = [aws_config_configuration_recorder_status.this]
+}
+
+resource "aws_config_config_rule" "kms_rotation" {
+  provider = aws.member
+  name     = "${var.name_prefix}-cmk-rotation-enabled"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "CMK_BACKING_KEY_ROTATION_ENABLED"
+  }
+
+  depends_on = [aws_config_configuration_recorder_status.this]
+}
+
+# ------------------------------- Outputs -----------------------------------
+
+output "payments_bucket" {
+  value = aws_s3_bucket.payments.bucket
+}
+
+output "kms_key_arn" {
+  value = aws_kms_key.payments.arn
+}
+
+output "alerts_topic_arn" {
+  value = aws_sns_topic.alerts.arn
+}
+
+output "scp_ids" {
+  value = {
+    region_lock    = aws_organizations_policy.region_lock.id
+    no_replication = aws_organizations_policy.no_replication.id
+  }
+}
+
+output "reminder" {
+  value = "Confirm the SNS subscription email, then run the tests: create a bucket/EC2 in us-east-1 (SCP denial), try adding an S3 replication rule (SCP denial + alert), and switch off default encryption on the payments bucket (Config NON_COMPLIANT + alert)."
+}
