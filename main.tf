@@ -11,6 +11,7 @@
 #               uploads with OUR key, and denies replication changes for EVERY identity
 #   Config    : recorder + 4 managed rules
 #   Alerts    : SNS email + EventBridge rules (replication change, Config NON_COMPLIANT)
+#   Audit     : CloudTrail trail (needed for EventBridge to see API calls; also the audit log)
 #
 # Be clear about the limits (say this in your case study)
 #   - IAM policies only bind the identities they are attached to. The region lock binds the
@@ -83,6 +84,10 @@ locals {
 
   payments_bucket_name = "${var.name_prefix}-payments-${local.account_id}"
   config_bucket_name   = "${var.name_prefix}-config-${local.account_id}"
+  trail_bucket_name    = "${var.name_prefix}-trail-${local.account_id}"
+
+  trail_name = "${var.name_prefix}-audit"
+  trail_arn  = "arn:aws:cloudtrail:${var.approved_region}:${local.account_id}:trail/${local.trail_name}"
 }
 
 # ===========================================================================
@@ -411,6 +416,75 @@ resource "aws_cloudwatch_event_target" "replication_to_sns" {
 resource "aws_cloudwatch_event_target" "config_to_sns" {
   rule     = aws_cloudwatch_event_rule.config_noncompliant.name
   arn      = aws_sns_topic.alerts.arn
+}
+
+# EventBridge only receives "AWS API Call via CloudTrail" events while a trail is logging, so
+# without this trail the replication_change rule above never fires. Single-Region trail in the
+# approved region; it also gives a durable audit log of every management call, denied ones included.
+resource "aws_s3_bucket" "trail_logs" {
+  bucket        = local.trail_bucket_name
+  force_destroy = true # demo only
+}
+
+resource "aws_s3_bucket_public_access_block" "trail_logs" {
+  bucket                  = aws_s3_bucket.trail_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "trail_logs" {
+  bucket     = aws_s3_bucket.trail_logs.id
+  depends_on = [aws_s3_bucket_public_access_block.trail_logs]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AWSCloudTrailAclCheck"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = "s3:GetBucketAcl"
+        Resource  = aws_s3_bucket.trail_logs.arn
+        Condition = { StringEquals = { "aws:SourceArn" = local.trail_arn } }
+      },
+      {
+        Sid       = "AWSCloudTrailWrite"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.trail_logs.arn}/AWSLogs/${local.account_id}/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"  = "bucket-owner-full-control"
+            "aws:SourceArn" = local.trail_arn
+          }
+        }
+      },
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.trail_logs.arn,
+          "${aws_s3_bucket.trail_logs.arn}/*"
+        ]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }
+    ]
+  })
+}
+
+resource "aws_cloudtrail" "audit" {
+  name                          = local.trail_name
+  s3_bucket_name                = aws_s3_bucket.trail_logs.id
+  is_multi_region_trail         = false
+  include_global_service_events = false
+  enable_log_file_validation    = true
+
+  depends_on = [aws_s3_bucket_policy.trail_logs]
 }
 
 resource "aws_sns_topic_policy" "alerts" {
