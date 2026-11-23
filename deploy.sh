@@ -204,6 +204,9 @@ EOF
   say "3. Bucket policy: expect Access Denied for SSE-S3, success for our KMS key  [screenshot 2]"
   expect_denied "upload with SSE-S3 (AES256)" as_op aws s3api put-object --bucket "$bucket" \
     --key tests/sse-s3.json --body "${tmp}/receipt.json" --server-side-encryption AES256 --region "$APPROVED_REGION"
+  expect_denied "upload over plain HTTP (no TLS)" as_op aws s3api put-object --bucket "$bucket" \
+    --key tests/no-tls.json --body "${tmp}/receipt.json" --region "$APPROVED_REGION" \
+    --endpoint-url "http://s3.${APPROVED_REGION}.amazonaws.com"
   expect_ok "upload with our KMS key" as_op aws s3api put-object --bucket "$bucket" \
     --key tests/sse-kms.json --body "${tmp}/receipt.json" --server-side-encryption aws:kms \
     --ssekms-key-id "$key" --region "$APPROVED_REGION"
@@ -264,6 +267,8 @@ case "${1:-help}" in
   fix)        load_vars; cmd_fix ;;
   destroy)    load_vars; cmd_destroy ;;
   url)        need terraform; terraform output -raw site_url; echo ;;
-  console)    load_vars; need aws; exec python3 server.py ;;
+  console)    load_vars; need aws
+              [ -f server.py ] || die "server.py not found next to deploy.sh. Use the public console instead: ./deploy.sh url"
+              exec python3 server.py ;;
   *)          usage ;;
 esac

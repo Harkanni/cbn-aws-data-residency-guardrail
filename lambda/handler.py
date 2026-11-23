@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 
 R, B, K = os.environ['APPROVED_REGION'], os.environ['BUCKET'], os.environ['KEY_ARN']
 P, T, ACCT = os.environ['PREFIX'], os.environ['TOPIC_ARN'], os.environ['ACCOUNT_ID']
+TOKEN = os.environ.get('API_TOKEN', '')  # empty = open demo; set var.api_token to require ?t=<token>
 REGIONS = {'us-east-1', 'eu-west-1', 'ap-southeast-1', R}
 SIDS = {'DenyReplicationChanges', 'DenyNonTLS', 'DenyNonKmsEncryption', 'DenyWrongKmsKey'}
 CFG = Config(retries={'max_attempts': 1}, connect_timeout=5, read_timeout=20)
@@ -87,8 +88,10 @@ def act(p):
     if a == 'upKey':
         return attempt('s3:PutObject, SSE-KMS with the AWS-managed key', put(ServerSideEncryption='aws:kms', SSEKMSKeyId='alias/aws/s3'))
     if a == 'upHttp':
+        # No encryption headers: S3 rejects any SSE-KMS request over HTTP before the bucket policy
+        # is evaluated, which would hide the DenyNonTLS statement. The bucket default applies our key.
         http = boto3.client('s3', region_name=R, config=CFG, endpoint_url=f'http://s3.{R}.amazonaws.com')
-        return attempt('s3:PutObject over plain HTTP', put(http, ServerSideEncryption='aws:kms', SSEKMSKeyId=K))
+        return attempt('s3:PutObject over plain HTTP', put(http))
     if a == 'repl':
         rc = {'Role': f'arn:aws:iam::{ACCT}:role/dummy-replication-role', 'Rules': [{
             'ID': 'offshore', 'Status': 'Enabled', 'Priority': 1, 'Filter': {},
@@ -170,6 +173,8 @@ def handler(event, context):
     if sum(1 for h in HITS if now - h < 60) >= 40:
         return out(429, {'error': 'Too many requests, slow down.'})
     path, method = event.get('rawPath', ''), event['requestContext']['http']['method']
+    if TOKEN and not secrets.compare_digest((event.get('headers') or {}).get('x-token', ''), TOKEN):
+        return out(401, {'error': 'Missing or wrong access token. Open the link with ?t=<token>.'})
     try:
         if method == 'GET' and path.endswith('/status'):
             return out(200, status())

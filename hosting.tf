@@ -17,6 +17,13 @@
 
 
 
+variable "api_token" {
+  description = "Optional shared token for the public console. Empty keeps the demo open; when set, open the site as https://<site>/?t=<token>."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # ------------------------------ Lambda role --------------------------------
 
 resource "aws_iam_role" "probe" {
@@ -58,9 +65,9 @@ resource "aws_iam_role_policy" "probe_allow" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ThingsTheDemoTries"
-        Effect = "Allow"
-        Action = ["ec2:CreateVpc", "kms:ListKeys", "kms:CreateKey", "lambda:ListFunctions", "rds:DescribeDBInstances"]
+        Sid      = "ThingsTheDemoTries"
+        Effect   = "Allow"
+        Action   = ["ec2:CreateVpc", "kms:ListKeys", "kms:CreateKey", "lambda:ListFunctions", "rds:DescribeDBInstances"]
         Resource = "*"
       },
       {
@@ -130,14 +137,15 @@ resource "aws_lambda_function" "probe" {
   memory_size      = 256
 
   environment {
-    variables = {
+    # API_TOKEN is only set when var.api_token is non-empty, so the default demo stays open.
+    variables = merge({
       APPROVED_REGION = var.approved_region
       BUCKET          = aws_s3_bucket.payments.bucket
       KEY_ARN         = aws_kms_key.payments.arn
       PREFIX          = var.name_prefix
       TOPIC_ARN       = aws_sns_topic.alerts.arn
       ACCOUNT_ID      = local.account_id
-    }
+    }, var.api_token == "" ? {} : { API_TOKEN = var.api_token })
   }
 }
 
