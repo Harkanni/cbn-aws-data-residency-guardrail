@@ -219,13 +219,34 @@ def out(code, body):
     return {'statusCode': code, 'headers': {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}, 'body': json.dumps(body)}
 
 
+_WATCH = {'at': 0.0, 'body': None}
+
+
+def watch():
+    """Read-only migration status for anyone with the link. Cached briefly so many viewers
+    polling at once do not multiply the AWS calls."""
+    now = time.time()
+    if _WATCH['body'] is None or now - _WATCH['at'] > 2:
+        s = mig_status()
+        if s['job'].get('error'):
+            s['job']['error'] = str(s['job']['error']).replace(ACCT, '************')
+        _WATCH.update(at=now, body=s)
+    return _WATCH['body']
+
+
 def handler(event, context):
     if 'job' in event:  # asynchronous job started by act()
         return run_job(event, context)
+    path, method = event.get('rawPath', ''), event['requestContext']['http']['method']
+    # Public, read-only: watch the migration live. Starting, pushing out, drift and reset need the key.
+    if method == 'GET' and path.rstrip('/') == '/api/migration':
+        try:
+            return out(200, watch())
+        except Exception as e:
+            return out(503, {'error': str(e).replace(ACCT, '************')[:200]})
     h = {k.lower(): v for k, v in (event.get('headers') or {}).items()}
     if not hmac.compare_digest(h.get('x-demo-key', '').encode(), KEY.encode()):
         return out(401, {'error': 'Presenter key required'})
-    path, method = event.get('rawPath', ''), event['requestContext']['http']['method']
     try:
         if path.endswith('/unlock'):
             return out(200, {'ok': True})
@@ -238,4 +259,4 @@ def handler(event, context):
             return out(200, act(json.loads(raw)))
         return out(404, {'error': 'not found'})
     except Exception as e:
-        return out(400, {'error': str(e)[:200]})
+        return out(400, {'error': str(e).replace(ACCT, '************')[:200]})

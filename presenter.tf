@@ -6,8 +6,10 @@
 #                                                         |--> Lambda job (async): DynamoDB copy / EC2 image copy
 #                                                         |--> DynamoDB state table (progress the page polls)
 #
+# Anyone with the link can WATCH the migration live (GET /api/migration, read-only).
 # Public visitors still only get the safe probes. These controls need the demo key:
 #     ./deploy.sh demo-key        (prints it; type it into "Presenter mode" on the page)
+# The Lambda code is lambda/presenter.py, zipped together with lambda/handler.py by hosting.tf.
 # The Lambda role carries the inbound-only policy from migration.tf: reads from the legacy region
 # are allowed, every write must target the approved region. RunInstances is limited to t3.micro.
 # Click "Reset migration" before `./deploy.sh destroy`: the migrated server and image are created
@@ -183,6 +185,14 @@ resource "aws_apigatewayv2_integration" "presenter" {
 resource "aws_apigatewayv2_route" "presenter" {
   api_id    = aws_apigatewayv2_api.probe.id
   route_key = "ANY /api/presenter/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.presenter.id}"
+}
+
+# Public and read-only: anyone with the link can WATCH the migration live (no key needed).
+# Starting it, pushing data out, drift and reset stay behind the demo key on the route above.
+resource "aws_apigatewayv2_route" "migration_watch" {
+  api_id    = aws_apigatewayv2_api.probe.id
+  route_key = "GET /api/migration"
   target    = "integrations/${aws_apigatewayv2_integration.presenter.id}"
 }
 

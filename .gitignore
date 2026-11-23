@@ -20,3 +20,6 @@ override.tf.json
 trash/
 files.zip
 probe-lambda.zip
+# Python bytecode
+__pycache__/
+*.pyc

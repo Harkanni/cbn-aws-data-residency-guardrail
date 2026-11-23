@@ -267,7 +267,7 @@ resource "aws_s3_bucket_public_access_block" "payments" {
 }
 
 resource "aws_s3_bucket_versioning" "payments" {
-  bucket   = aws_s3_bucket.payments.id
+  bucket = aws_s3_bucket.payments.id
 
   versioning_configuration {
     status = "Enabled"
@@ -275,7 +275,7 @@ resource "aws_s3_bucket_versioning" "payments" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "payments" {
-  bucket   = aws_s3_bucket.payments.id
+  bucket = aws_s3_bucket.payments.id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -287,7 +287,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "payments" {
 }
 
 resource "aws_s3_bucket_policy" "payments" {
-  bucket   = aws_s3_bucket.payments.id
+  bucket = aws_s3_bucket.payments.id
 
   # Applied after the public-access block to avoid concurrent-modification errors.
   depends_on = [aws_s3_bucket_public_access_block.payments]
@@ -366,7 +366,7 @@ resource "aws_s3_object" "sample_receipt" {
 # ===========================================================================
 
 resource "aws_sns_topic" "alerts" {
-  name     = "${var.name_prefix}-guardrail-alerts"
+  name = "${var.name_prefix}-guardrail-alerts"
 }
 
 resource "aws_sns_topic_subscription" "email" {
@@ -409,13 +409,13 @@ resource "aws_cloudwatch_event_rule" "config_noncompliant" {
 }
 
 resource "aws_cloudwatch_event_target" "replication_to_sns" {
-  rule     = aws_cloudwatch_event_rule.replication_change.name
-  arn      = aws_sns_topic.alerts.arn
+  rule = aws_cloudwatch_event_rule.replication_change.name
+  arn  = aws_sns_topic.alerts.arn
 }
 
 resource "aws_cloudwatch_event_target" "config_to_sns" {
-  rule     = aws_cloudwatch_event_rule.config_noncompliant.name
-  arn      = aws_sns_topic.alerts.arn
+  rule = aws_cloudwatch_event_rule.config_noncompliant.name
+  arn  = aws_sns_topic.alerts.arn
 }
 
 # EventBridge only receives "AWS API Call via CloudTrail" events while a trail is logging, so
@@ -488,7 +488,7 @@ resource "aws_cloudtrail" "audit" {
 }
 
 resource "aws_sns_topic_policy" "alerts" {
-  arn      = aws_sns_topic.alerts.arn
+  arn = aws_sns_topic.alerts.arn
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -568,7 +568,7 @@ resource "aws_s3_bucket_policy" "config_logs" {
 }
 
 resource "aws_iam_role" "config" {
-  name     = "${var.name_prefix}-config-role"
+  name = "${var.name_prefix}-config-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -588,8 +588,8 @@ resource "aws_iam_role_policy_attachment" "config_managed" {
 }
 
 resource "aws_iam_role_policy" "config_delivery" {
-  name     = "config-s3-delivery"
-  role     = aws_iam_role.config.id
+  name = "config-s3-delivery"
+  role = aws_iam_role.config.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -634,7 +634,7 @@ resource "aws_config_configuration_recorder_status" "this" {
 # --- Config log bucket (which uses default SSE-S3) does not show up as NON_COMPLIANT.
 
 resource "aws_config_config_rule" "s3_kms_default_encryption" {
-  name     = "${var.name_prefix}-s3-default-encryption-kms"
+  name = "${var.name_prefix}-s3-default-encryption-kms"
 
   source {
     owner             = "AWS"
@@ -650,7 +650,7 @@ resource "aws_config_config_rule" "s3_kms_default_encryption" {
 }
 
 resource "aws_config_config_rule" "s3_ssl_only" {
-  name     = "${var.name_prefix}-s3-ssl-requests-only"
+  name = "${var.name_prefix}-s3-ssl-requests-only"
 
   source {
     owner             = "AWS"
@@ -666,7 +666,7 @@ resource "aws_config_config_rule" "s3_ssl_only" {
 }
 
 resource "aws_config_config_rule" "s3_no_public" {
-  name     = "${var.name_prefix}-s3-public-access-prohibited"
+  name = "${var.name_prefix}-s3-public-access-prohibited"
 
   source {
     owner             = "AWS"
@@ -682,7 +682,7 @@ resource "aws_config_config_rule" "s3_no_public" {
 }
 
 resource "aws_config_config_rule" "kms_rotation" {
-  name     = "${var.name_prefix}-cmk-rotation-enabled"
+  name = "${var.name_prefix}-cmk-rotation-enabled"
 
   source {
     owner             = "AWS"

@@ -14,6 +14,7 @@
 #   ./deploy.sh fix          terraform apply to correct drift
 #   ./deploy.sh destroy      tear everything down (asks first)
 #   ./deploy.sh url          print the public live link (after ./deploy.sh up)
+#   ./deploy.sh demo-key     print the presenter key for the live page (Presenter mode)
 #   ./deploy.sh console      open the LIVE web console (runs server.py; real AWS calls)
 #
 # Settings come from terraform.tfvars or environment variables:
@@ -115,7 +116,9 @@ cmd_check() {
   [ -f main.tf ] && ok "main.tf found" || die "main.tf not found next to this script"
   if [ -f hosting.tf ]; then
     local f missing=0
-    for f in lambda/handler.py; do
+    local files="lambda/handler.py"
+    [ -f presenter.tf ] && files="$files lambda/presenter.py"
+    for f in $files; do
       if [ -f "$f" ]; then ok "$f found"; else bad "$f missing"; missing=1; fi
     done
     if [ -f site/index.html ] || [ -f console.html ]; then ok "site page found"
@@ -275,7 +278,7 @@ cmd_destroy() {
   echo "  The KMS key is scheduled for deletion in 7 days; it can still be billed until then."
 }
 
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   install-tf) cmd_install_tf ;;
@@ -291,6 +294,9 @@ case "${1:-help}" in
   fix)        load_vars; cmd_fix ;;
   destroy)    load_vars; cmd_destroy ;;
   url)        need terraform; terraform output -raw site_url; echo ;;
+  demo-key)   need terraform
+              terraform output -raw demo_key 2>/dev/null | tr -d '\r' || die "no demo_key output: is presenter.tf deployed? run ./deploy.sh up"
+              echo; echo "  Open $(terraform output -raw site_url 2>/dev/null | tr -d '\r') and type this into Presenter mode." ;;
   console)    load_vars; need aws
               [ -f server.py ] || die "server.py not found next to deploy.sh. Use the public console instead: ./deploy.sh url"
               exec python3 server.py ;;

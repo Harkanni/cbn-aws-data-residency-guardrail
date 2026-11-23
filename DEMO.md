@@ -171,6 +171,11 @@ If anything misbehaves live, this runs the core checks with PASS/FAIL:
 ## 11. Hand over to the web console
 
 ```bash
-./deploy.sh url
+./deploy.sh url          # share this link: anyone can run the safe probes and WATCH the migration live
+./deploy.sh demo-key     # type this into "Presenter mode" on the page to unlock migration, drift and fix
 curl -s "$(terraform output -raw site_url)/api/status" | jq '{rules, config, fired}'
+curl -s "$(terraform output -raw site_url)/api/migration" | jq '{legacy, dest, job}'   # the public live view
 ```
+
+Start "Migrate the EC2 server" early: the image copy takes several minutes, and viewers see the
+progress live. Click "Reset migration" before `./deploy.sh destroy`.

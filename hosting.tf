@@ -120,10 +120,12 @@ resource "aws_iam_role_policy" "probe_allow" {
 
 # ---------------------------- Lambda and API -------------------------------
 
+# One zip for both Lambdas: lambda/handler.py (public probes) and lambda/presenter.py (presenter.tf).
 data "archive_file" "probe" {
   type        = "zip"
-  source_file = "${path.module}/lambda/handler.py"
+  source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/probe-lambda.zip"
+  excludes    = ["__pycache__"]
 }
 
 resource "aws_lambda_function" "probe" {
