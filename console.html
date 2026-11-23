@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Region-lock guardrail console (live)</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1c1c1a;--mu:#6b6a64;--bd:#e2e0d8;--ok:#2f6b1a;--okb:#e8f3df;--bad:#a32d2d;--badb:#fceaea;--wn:#8a5a0b;--wnb:#fbefd8;--ac:#3c3489;--acb:#eeedfe;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171715;--card:#21211e;--tx:#ecebe5;--mu:#a3a199;--bd:#3a3935;--ok:#9fd27b;--okb:#243319;--bad:#f09595;--badb:#3a1c1c;--wn:#f0c070;--wnb:#3a2d12;--ac:#c9c5f7;--acb:#2b2850;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}
+h2{font-size:15px;font-weight:600;margin:0 0 10px}
+p{margin:0}.mu{color:var(--mu);font-size:13px}
+.banner{background:var(--acb);color:var(--ac);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
+.stat b{display:block;font-size:24px;font-weight:600;line-height:1.2}
+.grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+select,button{font:inherit;font-size:14px;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+select{flex:1;min-width:120px}
+button{cursor:pointer;text-align:left}
+button:hover{border-color:var(--mu)}
+button.go{background:var(--ac);color:var(--card);border-color:var(--ac);text-align:center}
+.btns{display:grid;gap:8px}
+.lbl{font-size:12px;color:var(--mu);margin:12px 0 6px;text-transform:none}
+.chip{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 7px;letter-spacing:.02em;white-space:nowrap}
+.c-ok{background:var(--okb);color:var(--ok)}.c-bad{background:var(--badb);color:var(--bad)}.c-wn{background:var(--wnb);color:var(--wn)}.c-ne{background:var(--bd);color:var(--mu)}
+.rule{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--bd)}
+.rule:first-of-type{border-top:0}
+.rule code{font-size:12.5px;word-break:break-all}
+ul{list-style:none;margin:0;padding:0;max-height:360px;overflow:auto}
+li{padding:9px 0;border-top:1px solid var(--bd);font-size:13.5px}
+li:first-child{border-top:0}
+li small{display:block;color:var(--mu);font-size:12px;margin-top:3px;word-break:break-word}
+.mail{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px}
+.mail pre{margin:6px 0 0;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--mu)}
+.empty{color:var(--mu);font-size:13px}
+@media (max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}.kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--bd);font-size:13.5px}.kv:first-of-type{border-top:0}
+.mg-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.mg-btns button{flex:1;min-width:150px}
+#mig svg{width:100%;height:auto;display:block}#mig svg text{fill:var(--tx);font:13px system-ui,sans-serif}#mig svg .sub{fill:var(--mu);font-size:12px}#mig svg .ttl{font-weight:600}
+#mig .reg{fill:none;stroke:var(--bd);stroke-width:1.5;stroke-dasharray:6 4}#mig .tile{fill:var(--card);stroke:var(--bd);stroke-width:1}#mig .tile.live{stroke:var(--ok)}
+#mig .flow{fill:none;stroke:var(--mu);stroke-width:2.5;stroke-dasharray:3 8;stroke-linecap:round;opacity:.45}
+#mig g.on .flow{stroke:var(--ac);opacity:1;animation:dash .7s linear infinite}#mig g.done .flow{stroke:var(--ok);opacity:1;stroke-dasharray:none}#mig g.bad .flow{stroke:var(--bad);opacity:1;animation:dash .5s linear infinite}
+#mig .dot{display:none;fill:var(--ac)}#mig g.on .dot{display:inline}#mig g.bad .dot{display:inline;fill:var(--bad)}#mig .bar{fill:var(--ok)}#mig .barbg{fill:var(--bd)}
+@keyframes dash{to{stroke-dashoffset:-22}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Region-lock guardrail console <span class="chip c-ok">LIVE</span></h1>
+  <p class="mu" id="hdr">Connecting to AWS…</p>
+  <div class="banner">Live mode. Every button triggers a real AWS API call against the demo account, and every result below is AWS’s own response. Nothing is simulated. af-south-1 (Cape Town) is not inside Nigeria, so this shows the guardrail pattern, not CBN compliance.</div>
+  <div class="stats">
+    <div class="stat"><b id="sDen">0</b><span class="mu">Denied by AWS</span></div>
+    <div class="stat"><b id="sOk">0</b><span class="mu">Allowed by AWS</span></div>
+    <div class="stat"><b id="sCmp">–</b><span class="mu">Config rules compliant</span></div>
+    <div class="stat"><b id="sAl">–</b><span class="mu">Alert rules fired (24h)</span></div>
+  </div>
+  <div class="card" id="mig" style="display:none">
+    <h2>Migration into the approved region</h2>
+    <p class="mu">A real migration from the offshore legacy region. The server is copied as an image (re-encrypted with your key) and launched; the database records are read from legacy and written into the approved region. Dotted arrows move while AWS is actually copying.</p>
+    <svg viewBox="0 0 680 335" role="img" aria-label="Migration from the legacy region to the approved region">
+      <rect class="reg" x="20" y="14" width="230" height="240" rx="14"/><rect class="reg" x="430" y="14" width="230" height="240" rx="14"/>
+      <text class="ttl" x="34" y="38" id="lReg">Legacy region</text><text class="ttl" x="444" y="38" id="dReg">Approved region</text>
+      <rect class="tile" id="tLE" x="35" y="58" width="200" height="64" rx="10"/><text class="ttl" x="50" y="82">EC2 server</text><text class="sub" x="50" y="102" id="lEc2">…</text>
+      <rect class="tile" id="tLD" x="35" y="168" width="200" height="64" rx="10"/><text class="ttl" x="50" y="192">Database</text><text class="sub" x="50" y="212" id="lDb">…</text>
+      <rect class="tile" id="tDE" x="445" y="58" width="200" height="64" rx="10"/><text class="ttl" x="460" y="82">EC2 server</text><text class="sub" x="460" y="102" id="dEc2">…</text>
+      <rect class="tile" id="tDD" x="445" y="168" width="200" height="64" rx="10"/><text class="ttl" x="460" y="192">Database</text><text class="sub" x="460" y="212" id="dDb">…</text>
+      <g id="g_p_ec2"><path id="p_ec2" class="flow" d="M240 90 L440 90"/><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite"><mpath href="#p_ec2"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0.6s" repeatCount="indefinite"><mpath href="#p_ec2"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="1.2s" repeatCount="indefinite"><mpath href="#p_ec2"/></animateMotion></circle></g>
+      <g id="g_p_db"><path id="p_db" class="flow" d="M240 200 L440 200"/><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite"><mpath href="#p_db"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0.6s" repeatCount="indefinite"><mpath href="#p_db"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="1.2s" repeatCount="indefinite"><mpath href="#p_db"/></animateMotion></circle></g>
+      <text class="sub" x="340" y="74" text-anchor="middle" id="cEc2"></text><text class="sub" x="340" y="184" text-anchor="middle" id="cDb"></text>
+      <rect class="barbg" x="265" y="214" width="150" height="6" rx="3"/><rect class="bar" id="bar" x="265" y="214" width="0" height="6" rx="3"/>
+      <rect class="tile" x="250" y="285" width="180" height="40" rx="10"/><text class="sub" x="340" y="310" text-anchor="middle">Any other region: denied</text>
+      <g id="g_p_out"><path id="p_out" class="flow" d="M545 256 C545 300 480 305 434 305"/><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0.6s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="1.2s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle></g>
+    </svg>
+    <div class="mg-btns">
+      <button class="go" data-m="migDb">Migrate the database</button>
+      <button class="go" data-m="migEc2">Migrate the EC2 server</button>
+      <button data-m="migOutDb">Try to move data OUT (database)</button>
+      <button data-m="migOutEc2">Try to move the server OUT</button>
+      <button data-m="migReset">Reset migration</button>
+    </div>
+    <p class="mu" style="margin-top:8px" id="mgNote">Image copies take several minutes. Click Reset before running <code>./deploy.sh destroy</code>.</p>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>1. Region lock (operator role)</h2>
+        <p class="mu">Runs a real API call as the guardrail role. EC2 uses a dry run, S3 creates then deletes a bucket.</p>
+        <div class="row" style="margin-top:10px">
+          <select id="svc" aria-label="Service"><option value="ec2">EC2: create VPC (dry run)</option><option value="s3">S3: create bucket</option><option value="kms">KMS: list keys</option><option value="lambda">Lambda: list functions</option><option value="rds">RDS: list instances</option></select>
+          <select id="reg" aria-label="Region"><option value="us-east-1">us-east-1 (N. Virginia)</option><option value="eu-west-1">eu-west-1 (Ireland)</option><option value="ap-southeast-1">ap-southeast-1 (Singapore)</option><option value="af-south-1">af-south-1 (Cape Town)</option></select>
+        </div>
+        <button class="go" id="probe" style="width:100%">Run API call</button>
+      </div>
+      <div class="card">
+        <h2>2. Data guardrails</h2>
+        <div class="btns">
+          <button data-a="upOk">Upload receipt encrypted with our KMS key</button>
+          <button data-a="upS3">Upload receipt with SSE-S3 (AES256)</button>
+          <button data-a="upKey">Upload with the AWS-managed S3 key instead</button>
+          <button data-a="upHttp">Upload over plain HTTP</button>
+          <button data-a="repl">Add a replication rule (operator role)</button>
+          <button data-a="replAdmin" id="replAdmin">Add a replication rule (your admin identity)</button>
+          <button data-a="mrk">Create a multi-Region KMS key (operator role)</button>
+        </div>
+      </div>
+      <div class="card" id="driftCard">
+        <h2>3. Real drift as an admin</h2>
+        <p class="mu">These change your real resources. Config should flag them within minutes.</p>
+        <div class="btns" style="margin-top:10px">
+          <button data-a="enc">Remove default encryption from the bucket</button>
+          <button data-a="ssl">Delete the bucket policy</button>
+          <button data-a="pub">Turn off Block Public Access</button>
+          <button data-a="rot">Turn off KMS key rotation</button>
+          <button data-a="fix" class="go">Run terraform apply (fix drift)</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card"><h2>AWS Config rules (live)</h2><div id="rules"><p class="empty">Loading…</p></div><p class="mu" style="margin-top:8px">Config re-evaluates a few minutes after a change. <a href="#" id="ref">Refresh now</a></p></div>
+      <div class="card"><h2>Live resource configuration</h2><div id="cfg"><p class="empty">Loading…</p></div></div>
+      <div class="card"><h2>Alert path</h2><div id="alerts"><p class="empty">Loading…</p></div></div>
+      <div class="card"><h2>Event log (real AWS responses)</h2><ul id="log"></ul></div>
+    </div>
+  </div>
+</div>
+<script>
+var TOK=new URLSearchParams(location.search).get('t')||'',den=0,ok=0,busy=false;
+var $=function(i){return document.getElementById(i)};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function t(){return new Date().toLocaleTimeString([],{hour12:false})}
+function api(p,b){return fetch(p,{method:b?'POST':'GET',headers:{'X-Token':TOK,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
+function chip(c,s){return '<span class="chip '+c+'">'+s+'</span>'}
+function log(title,r){
+  var c={denied:['c-bad','DENIED'],allowed:['c-ok','ALLOWED'],error:['c-wn','ERROR']}[r.verdict]||['c-wn','ERROR'];
+  var li=document.createElement('li');
+  li.innerHTML=chip(c[0],c[1])+' '+esc(title)+' <span class="mu">· '+t()+(r.who?' · as '+r.who:'')+'</span>'+(r.cmd?'<small class="cmd">$ '+esc(r.cmd)+'</small>':'')+'<small>'+esc(r.detail||'')+'</small>';
+  $('log').insertBefore(li,$('log').firstChild);
+  $('sDen').textContent=den;$('sOk').textContent=ok;
+}
+function run(body,title){
+  if(busy)return;busy=true;document.body.classList.add('busy');
+  var li=document.createElement('li');li.innerHTML=chip('c-ne','RUNNING')+' '+esc(title)+'…';$('log').insertBefore(li,$('log').firstChild);
+  api('/api/run',body).then(function(r){
+    if(r.error)r={verdict:'error',detail:r.error};
+    if(r.verdict==='denied')den++;if(r.verdict==='allowed')ok++;
+    li.remove();log(title,r);if(body.action.indexOf('migOut')===0&&r.verdict==='denied')flash();if(body.action.indexOf('mig')===0)refreshMig();
+  }).catch(function(e){li.remove();log(title,{verdict:'error',detail:String(e)})}).then(function(){busy=false;document.body.classList.remove('busy');refresh()});
+}
+function refresh(){
+  api('/api/status').then(function(s){
+    if(s.error){$('hdr').textContent='Status error: '+s.error;return}
+    if(s.mode==='public'){$('driftCard').style.display='none';$('replAdmin').style.display='none'}
+    $('hdr').textContent='Account '+s.account+' · approved region '+s.region+' · bucket '+s.bucket;
+    var good=s.rules.filter(function(r){return r.status==='COMPLIANT'}).length;
+    $('sCmp').textContent=good+'/'+s.rules.length;
+    $('sAl').textContent=s.fired.replication+s.fired.config;
+    $('rules').innerHTML=s.rules.length?s.rules.map(function(r){var c=r.status==='COMPLIANT'?'c-ok':r.status==='NON_COMPLIANT'?'c-bad':'c-ne';return '<div class="rule"><code>'+esc(r.name)+'</code>'+chip(c,r.status)+'</div>'}).join(''):'<p class="empty">No rules evaluated yet.</p>';
+    $('cfg').innerHTML=s.config.map(function(k){return '<div class="kv"><span>'+k.label+'</span><span>'+esc(k.value)+' '+chip(k.ok?'c-ok':'c-bad',k.ok?'OK':'CHANGED')+'</span></div>'}).join('');
+    $('alerts').innerHTML=(s.subs.length?s.subs.map(function(u){return '<div class="kv"><span>'+esc(u.endpoint)+'</span>'+chip(u.confirmed?'c-ok':'c-wn',u.confirmed?'CONFIRMED':'PENDING CONFIRMATION')+'</div>'}).join(''):'<p class="empty">No SNS subscription found.</p>')
+      +'<div class="kv"><span>Replication rule fired (24h)</span><b>'+s.fired.replication+'</b></div><div class="kv"><span>Config rule fired (24h)</span><b>'+s.fired.config+'</b></div><p class="mu" style="margin-top:8px">Counts come from CloudWatch and lag a few minutes. The email itself arrives in your real inbox.</p>';
+  }).catch(function(e){$('hdr').textContent='Cannot reach the local server: '+e});
+}
+$('probe').onclick=function(){var s=$('svc'),r=$('reg');run({action:'probe',service:s.value,region:r.value},s.options[s.selectedIndex].text+' in '+r.value)};
+document.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){run({action:b.dataset.a},b.textContent)}});
+$('ref').onclick=function(e){e.preventDefault();refresh()};
+refresh();setInterval(function(){if(!busy&&!document.hidden)refresh()},30000);
+var mgTimer=null,flashT=null;
+function setG(id,c){var g=$('g_'+id);g.setAttribute('class',c||'')}
+function flash(){setG('p_out','bad');clearTimeout(flashT);flashT=setTimeout(function(){setG('p_out','')},3500)}
+function refreshMig(){
+  api('/api/migration').then(function(s){
+    if(!s||!s.enabled){$('mig').style.display='none';return}
+    $('mig').style.display='block';
+    var j=s.job,L=s.legacy,D=s.dest,total=j.total||L.rows||0;
+    $('lReg').textContent='Legacy: '+s.legacy_region+' (offshore)';$('dReg').textContent=s.region+' (approved)';
+    $('lEc2').textContent=L.image==='available'?'Image ready, server stopped':'Image: '+L.image;
+    $('lDb').textContent=(L.rows==null?'?':L.rows)+' payment records';
+    var ins=D.instance==='none'?(D.image==='none'?'Not migrated':'Image '+D.image):'Server '+D.instance;
+    $('dEc2').textContent=ins;
+    $('dDb').textContent=(D.rows==null?'?':D.rows)+' records · KMS-encrypted';
+    $('tDE').setAttribute('class','tile'+(D.instance==='running'?' live':''));
+    $('tDD').setAttribute('class','tile'+(D.rows>0&&D.rows>=(L.rows||1)?' live':''));
+    var dbRun=j.db==='running',ecRun=j.ec2==='copying'||j.ec2==='launching';
+    setG('p_db',dbRun?'on':(j.db==='done'||D.rows>=(L.rows||1)&&D.rows>0)?'done':'');
+    setG('p_ec2',ecRun?'on':(j.ec2==='done'||D.instance==='running')?'done':'');
+    $('cDb').textContent=dbRun?j.moved+' of '+total+' records':(j.db==='done'?total+' records moved':'');
+    $('cEc2').textContent=j.ec2==='copying'?'Copying image…':j.ec2==='launching'?'Launching server…':(j.ec2==='done'?'Server running':'');
+    $('bar').setAttribute('width',total?Math.round(150*Math.min(1,(dbRun?j.moved:D.rows||0)/total)):0);
+    $('mgNote').textContent=j.error?'Error: '+j.error:'Image copies take several minutes. Click Reset before running ./deploy.sh destroy.';
+    clearTimeout(mgTimer);mgTimer=setTimeout(refreshMig,(dbRun||ecRun)?3000:15000);
+  }).catch(function(){$('mig').style.display='none'});
+}
+document.querySelectorAll('[data-m]').forEach(function(b){b.onclick=function(){run({action:b.dataset.m},b.textContent)}});
+refreshMig();
+
+</script>
+</body>
+</html>

@@ -36,7 +36,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed"; }
 
 tfvar() {
   [ -f terraform.tfvars ] || return 0
-  grep -E "^$1[[:space:]]*=" terraform.tfvars | head -1 \
+  grep -E "^$1[[:space:]]*=" terraform.tfvars | head -1 | tr -d '\r' \
     | sed -E 's/^[^=]*=[[:space:]]*"?([^"#]*)"?.*/\1/' | xargs || true
 }
 
@@ -48,14 +48,14 @@ load_vars() {
   export TF_VAR_alert_email="$ALERT_EMAIL" TF_VAR_approved_region="$APPROVED_REGION" TF_VAR_name_prefix="$NAME_PREFIX"
 }
 
-account_id() { aws sts get-caller-identity --query Account --output text; }
+account_id() { aws sts get-caller-identity --query Account --output text | tr -d '\r'; }
 
 assume() {
   [ -z "$OP_AK" ] || return 0
   local acct role i; acct="$(account_id)"; role="arn:aws:iam::${acct}:role/${NAME_PREFIX}-operator"
   for i in 1 2 3 4 5; do   # a new role can take a few seconds to become assumable
     if read -r OP_AK OP_SK OP_ST < <(aws sts assume-role --role-arn "$role" --role-session-name guardrail-demo \
-        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>/dev/null); then return 0; fi
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>/dev/null | tr -d '\r'); then return 0; fi
     sleep 5
   done
   die "cannot assume ${role}. Use an IAM admin user or role (not root), and run ./deploy.sh up first"
@@ -65,7 +65,11 @@ as_op() {
   AWS_ACCESS_KEY_ID="$OP_AK" AWS_SECRET_ACCESS_KEY="$OP_SK" AWS_SESSION_TOKEN="$OP_ST" "$@"
 }
 
-tf_out() { terraform output -raw "$1" 2>/dev/null || die "terraform output $1 not found; run ./deploy.sh up first"; }
+tf_out() {
+  local v
+  v="$(terraform output -raw "$1" 2>/dev/null | tr -d '\r')" || die "terraform output $1 not found; run ./deploy.sh up first"
+  printf '%s' "$v"
+}
 
 # ---------------------------------------------------------------------------
 
@@ -109,6 +113,15 @@ cmd_check() {
   else bad "terraform missing (run: ./deploy.sh install-tf)"; fi
   need aws; ok "aws cli: $(aws --version 2>&1 | cut -d' ' -f1)"
   [ -f main.tf ] && ok "main.tf found" || die "main.tf not found next to this script"
+  if [ -f hosting.tf ]; then
+    local f missing=0
+    for f in lambda/handler.py; do
+      if [ -f "$f" ]; then ok "$f found"; else bad "$f missing"; missing=1; fi
+    done
+    if [ -f site/index.html ] || [ -f console.html ]; then ok "site page found"
+    else bad "site/index.html (or console.html) missing"; missing=1; fi
+    [ "$missing" -eq 0 ] || die "hosting.tf needs those files: copy them next to main.tf (keep the lambda/ and site/ folders), or delete hosting.tf to skip the public site"
+  fi
 
   say "Credentials"
   local arn; arn="$(aws sts get-caller-identity --query Arn --output text)" || die "no valid AWS credentials"
@@ -128,9 +141,18 @@ cmd_check() {
   esac
   rec="$(aws configservice describe-configuration-recorders --region "$APPROVED_REGION" \
         --query 'ConfigurationRecorders[].name' --output text 2>/dev/null || true)"
-  if [ -n "$rec" ] && [ "$rec" != "None" ]; then
-    warn "a Config recorder already exists in ${APPROVED_REGION} (${rec}); only one is allowed, so terraform apply will fail"
-  else ok "no existing Config recorder"; fi
+  if [ -z "$rec" ] || [ "$rec" = "None" ]; then
+    ok "no existing Config recorder"
+  elif terraform state list 2>/dev/null | grep -qx 'aws_config_configuration_recorder.this'; then
+    ok "Config recorder ${rec} is already managed by this Terraform state"
+  else
+    warn "a Config recorder (${rec}) exists in ${APPROVED_REGION} but is not in this Terraform state; only one is allowed, so apply will fail."
+    echo "        If it is a leftover from an earlier run, remove it, then re-run check:"
+    echo "          aws configservice stop-configuration-recorder --configuration-recorder-name ${rec} --region ${APPROVED_REGION}"
+    echo "          aws configservice delete-delivery-channel --delivery-channel-name ${NAME_PREFIX}-channel --region ${APPROVED_REGION}"
+    echo "          aws configservice delete-configuration-recorder --configuration-recorder-name ${rec} --region ${APPROVED_REGION}"
+    echo "        Other leftovers show up as 'already exists' errors in the plan; delete or import each one."
+  fi
 }
 
 cmd_init() { need terraform; terraform init -input=false; }
@@ -180,7 +202,8 @@ cmd_test() {
   need aws; need terraform; assume
   local acct bucket key tmp
   acct="$(account_id)"; bucket="$(tf_out payments_bucket)"; key="$(tf_out kms_key_arn)"
-  tmp="$(mktemp -d)"
+  tmp="$(mktemp -d)"; wtmp="$tmp"
+  command -v cygpath >/dev/null 2>&1 && wtmp="$(cygpath -m "$tmp")"   # Git Bash: aws.exe needs C:/... paths
   echo '{"receipt_id":"cli-test","amount":1000,"note":"SIMULATED DATA"}' > "${tmp}/receipt.json"
   cat > "${tmp}/repl.json" <<EOF
 {"Role":"arn:aws:iam::${acct}:role/dummy-replication-role",
@@ -196,16 +219,16 @@ EOF
 
   say "2. Replication and multi-Region keys: expect Access Denied  [alert email 1]"
   expect_denied "operator role: put bucket replication" as_op aws s3api put-bucket-replication \
-    --bucket "$bucket" --replication-configuration "file://${tmp}/repl.json" --region "$APPROVED_REGION"
+    --bucket "$bucket" --replication-configuration "file://${wtmp}/repl.json" --region "$APPROVED_REGION"
   expect_denied "YOUR ADMIN identity: put bucket replication (bucket policy binds admins too)" aws s3api put-bucket-replication \
-    --bucket "$bucket" --replication-configuration "file://${tmp}/repl.json" --region "$APPROVED_REGION"
+    --bucket "$bucket" --replication-configuration "file://${wtmp}/repl.json" --region "$APPROVED_REGION"
   expect_denied "operator role: create multi-Region KMS key" as_op aws kms create-key --multi-region --region "$APPROVED_REGION"
 
   say "3. Bucket policy: expect Access Denied for SSE-S3, success for our KMS key  [screenshot 2]"
   expect_denied "upload with SSE-S3 (AES256)" as_op aws s3api put-object --bucket "$bucket" \
-    --key tests/sse-s3.json --body "${tmp}/receipt.json" --server-side-encryption AES256 --region "$APPROVED_REGION"
+    --key tests/sse-s3.json --body "${wtmp}/receipt.json" --server-side-encryption AES256 --region "$APPROVED_REGION"
   expect_ok "upload with our KMS key" as_op aws s3api put-object --bucket "$bucket" \
-    --key tests/sse-kms.json --body "${tmp}/receipt.json" --server-side-encryption aws:kms \
+    --key tests/sse-kms.json --body "${wtmp}/receipt.json" --server-side-encryption aws:kms \
     --ssekms-key-id "$key" --region "$APPROVED_REGION"
   as_op aws s3api head-object --bucket "$bucket" --key tests/sse-kms.json --region "$APPROVED_REGION" \
     --query '{Encryption:ServerSideEncryption,Key:SSEKMSKeyId}' --output table || true
@@ -242,6 +265,7 @@ cmd_fix() { need terraform; terraform apply -input=false -auto-approve; }
 
 cmd_destroy() {
   need terraform
+  echo "  If you ran the migration demo, click 'Reset migration' in the console first; the migrated server and image are created at run time and Terraform does not know about them."
   read -r -p "Destroy ALL guardrail resources? Type destroy to continue: " a
   [ "$a" = "destroy" ] || die "cancelled"
   terraform destroy -input=false -auto-approve
@@ -264,6 +288,6 @@ case "${1:-help}" in
   fix)        load_vars; cmd_fix ;;
   destroy)    load_vars; cmd_destroy ;;
   url)        need terraform; terraform output -raw site_url; echo ;;
-  console)    load_vars; need aws; exec python3 server.py ;;
+  console)    load_vars; need aws; exec py server.py ;;
   *)          usage ;;
 esac

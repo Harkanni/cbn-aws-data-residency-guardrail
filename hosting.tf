@@ -15,7 +15,7 @@
 # through it. A new account may need CloudFront verification before the distribution can be created.
 # ---------------------------------------------------------------------------
 
-
+# (The archive provider is declared in main.tf: Terraform allows only one required_providers block.)
 
 # ------------------------------ Lambda role --------------------------------
 
@@ -193,11 +193,16 @@ resource "aws_s3_bucket_public_access_block" "site" {
   restrict_public_buckets = true
 }
 
+locals {
+  # Use site/index.html if it exists, otherwise console.html from the same folder as main.tf.
+  site_file = fileexists("${path.module}/site/index.html") ? "${path.module}/site/index.html" : "${path.module}/console.html"
+}
+
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.site.id
   key          = "index.html"
-  source       = "${path.module}/site/index.html"
-  etag         = filemd5("${path.module}/site/index.html")
+  source       = local.site_file
+  etag         = filemd5(local.site_file)
   content_type = "text/html; charset=utf-8"
 }
 
