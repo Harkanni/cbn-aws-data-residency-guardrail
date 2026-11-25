@@ -12,9 +12,12 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from codeview import Call
+
 E = os.environ
 R, B, K, P, ACCT = E['APPROVED_REGION'], E['BUCKET'], E['KEY_ARN'], E['PREFIX'], E['ACCOUNT_ID']
 LR, LT, DT, LAMI = E['LEGACY_REGION'], E['LEGACY_TABLE'], E['DEST_TABLE'], E['LEGACY_AMI']
+LINST = E.get('LEGACY_INSTANCE', '')
 KEY, STATE, PARAM, FN = E['DEMO_KEY'], E['STATE_TABLE'], E['POLICY_PARAM'], E.get('AWS_LAMBDA_FUNCTION_NAME', '')
 EC2_NAME = 'migrated-payments-app'
 CFG = Config(retries={'max_attempts': 2}, connect_timeout=5, read_timeout=25)
@@ -24,21 +27,59 @@ def cl(svc, region=R):
     return boto3.client(svc, region_name=region, config=CFG)
 
 
-def res(verdict, cmd, detail):
-    return {'verdict': verdict, 'who': 'presenter role', 'cmd': cmd, 'detail': str(detail).replace(ACCT, '************')[:600]}
+def mask(s):
+    return str(s).replace(ACCT, '************')
 
 
-def attempt(cmd, fn, ok='Request succeeded.'):
+def res(verdict, cmd, detail, code=None, cli=None):
+    r = {'verdict': verdict, 'who': 'presenter role', 'cmd': cmd, 'detail': mask(detail)[:600],
+         'role': f'{P}-presenter-lambda', 'source': 'lambda/presenter.py'}
+    if code:  # the exact code that ran, as Python and as the AWS CLI equivalent
+        r['code'], r['cli'] = mask(code), mask(cli or '')
+    return r
+
+
+def attempt(cmd, call, ok='Request succeeded.'):
+    """Run one Call (or a (fn, code, cli) tuple) and report AWS's own answer with the code that ran."""
+    fn, code, cli = (call, call.code(), call.cli()) if isinstance(call, Call) else call
     try:
         fn()
-        return res('allowed', cmd, ok)
+        return res('allowed', cmd, ok, code, cli)
     except ClientError as e:
         c = e.response.get('Error', {})
-        code, msg = c.get('Code', ''), c.get('Message', '')
-        denied = code in ('AccessDenied', 'UnauthorizedOperation', 'AccessDeniedException') or 'explicit deny' in msg
-        return res('denied' if denied else 'error', cmd, f'{code}: {msg}')
+        ec, msg = c.get('Code', ''), c.get('Message', '')
+        denied = ec in ('AccessDenied', 'UnauthorizedOperation', 'AccessDeniedException') or 'explicit deny' in msg
+        return res('denied' if denied else 'error', cmd, f'{ec}: {msg}', code, cli)
     except Exception as e:
-        return res('error', cmd, f'{type(e).__name__}: {e}')
+        return res('error', cmd, f'{type(e).__name__}: {e}', code, cli)
+
+
+def C(svc, op, region=R, **kw):
+    return Call(svc, region, op, config=CFG, **kw)
+
+
+# What the background jobs run (job_db and job_ec2 below), shown in the console's code panel.
+def code_db():
+    return (f"""legacy = boto3.client('dynamodb', region_name={LR!r})   # offshore: read only
+items = legacy.scan(TableName={LT!r})['Items']
+dest = boto3.client('dynamodb', region_name={R!r})     # approved region: writes allowed
+for i in range(0, len(items), 5):
+    dest.batch_write_item(RequestItems={{{DT!r}: [{{'PutRequest': {{'Item': it}}}} for it in items[i:i + 5]]}})""",
+            f"""aws dynamodb scan --table-name {LT} --region {LR}
+# then, 5 records at a time, into the approved region:
+aws dynamodb batch-write-item --request-items file://batch.json --region {R}""")
+
+
+def code_ec2():
+    return (f"""ec2 = boto3.client('ec2', region_name={R!r})   # called IN the approved region
+ami = ec2.copy_image(Name={P + '-' + EC2_NAME!r}, SourceImageId={LAMI!r}, SourceRegion={LR!r},
+                     Encrypted=True, KmsKeyId={K!r})['ImageId']   # re-encrypted with the bank's key
+# wait until the copy is 'available', then launch it:
+ec2.run_instances(ImageId=ami, InstanceType='t3.micro', MinCount=1, MaxCount=1,
+                  TagSpecifications=[{{'ResourceType': 'instance', 'Tags': [{{'Key': 'Name', 'Value': {EC2_NAME!r}}}]}}])""",
+            f"""aws ec2 copy-image --name {P}-{EC2_NAME} --source-image-id {LAMI} --source-region {LR} --encrypted --kms-key-id {K} --region {R}
+aws ec2 wait image-available --image-ids <new-ami> --region {R}
+aws ec2 run-instances --image-id <new-ami> --instance-type t3.micro --count 1 --tag-specifications 'ResourceType=instance,Tags=[{{Key=Name,Value={EC2_NAME}}}]' --region {R}""")
 
 
 # ---- job state: one DynamoDB item per job, each written only by its own job -----------------
@@ -104,6 +145,27 @@ def start(job):
 
 
 # ---- migration status and reset -------------------------------------------------------------
+def legacy_table_state():
+    try:
+        return cl('dynamodb', LR).describe_table(TableName=LT)['Table']['TableStatus'].lower()  # active / deleting
+    except ClientError as e:
+        return 'deleted' if e.response['Error']['Code'] == 'ResourceNotFoundException' else 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def legacy_instance_state():
+    if not LINST:
+        return 'unknown'
+    try:
+        ins = [i for r in cl('ec2', LR).describe_instances(InstanceIds=[LINST])['Reservations'] for i in r['Instances']]
+        return ins[0]['State']['Name'] if ins else 'none'
+    except ClientError as e:
+        return 'none' if 'NotFound' in e.response['Error']['Code'] else 'unknown'
+    except Exception:
+        return 'unknown'
+
+
 def mig_status():
     def count(t, r):
         try:
@@ -129,18 +191,23 @@ def mig_status():
 
     jobs = {'lrows': lambda: count(LT, LR), 'drows': lambda: count(DT, R), 'limg': lambda: image(LR, ImageIds=[LAMI]),
             'dimg': lambda: image(R, Owners=['self'], Filters=[{'Name': 'name', 'Values': [f'{P}-{EC2_NAME}']}]),
-            'dins': instance, 'db': lambda: get('db'), 'ec2': lambda: get('ec2')}
-    with ThreadPoolExecutor(7) as ex:
+            'dins': instance, 'db': lambda: get('db'), 'ec2': lambda: get('ec2'),
+            'ltab': legacy_table_state, 'lins': legacy_instance_state}
+    with ThreadPoolExecutor(9) as ex:
         futs = {k: ex.submit(f) for k, f in jobs.items()}
         r = {k: f.result() for k, f in futs.items()}
     db, ec = r['db'], r['ec2']
-    return {'enabled': True, 'legacy_region': LR, 'region': R, 'legacy': {'rows': r['lrows'], 'image': r['limg']},
+    return {'enabled': True, 'legacy_region': LR, 'region': R, 'legacy_table': LT, 'dest_table': DT,
+            'legacy': {'rows': r['lrows'], 'image': r['limg'], 'table': r['ltab'], 'instance': r['lins']},
             'dest': {'rows': r['drows'], 'image': r['dimg'], 'instance': r['dins']},
             'job': {'db': db.get('state'), 'moved': db.get('moved', 0), 'total': db.get('total', 0), 'ec2': ec.get('state'),
                     'ami': ec.get('ami'), 'instance': ec.get('instance'), 'error': db.get('error') or ec.get('error')}}
 
 
 def reset():
+    if legacy_table_state() == 'deleted':
+        raise RuntimeError('The offshore copies are decommissioned, so the migrated data is now the only copy. '
+                           'Rebuild the legacy side first (./deploy.sh fix), then reset.')
     if get('db').get('state') == 'running' or get('ec2').get('state') in ('copying', 'launching'):
         raise RuntimeError('a migration is still running')
     e = cl('ec2')
@@ -166,51 +233,139 @@ def reset():
     put('ec2', {'state': 'idle'})
 
 
-def fix():
-    s3 = cl('s3')
-    s3.put_bucket_encryption(Bucket=B, ServerSideEncryptionConfiguration={'Rules': [{
+def fix_parts():
+    """The four restore calls, in order. The bucket policy is read back from the copy kept in SSM."""
+    enc = C('s3', 'put_bucket_encryption', Bucket=B, ServerSideEncryptionConfiguration={'Rules': [{
         'ApplyServerSideEncryptionByDefault': {'SSEAlgorithm': 'aws:kms', 'KMSMasterKeyID': K}, 'BucketKeyEnabled': True}]})
-    s3.put_bucket_policy(Bucket=B, Policy=cl('ssm').get_parameter(Name=PARAM)['Parameter']['Value'])
-    s3.put_public_access_block(Bucket=B, PublicAccessBlockConfiguration={
+    pab = C('s3', 'put_public_access_block', Bucket=B, PublicAccessBlockConfiguration={
         'BlockPublicAcls': True, 'IgnorePublicAcls': True, 'BlockPublicPolicy': True, 'RestrictPublicBuckets': True})
-    cl('kms').enable_key_rotation(KeyId=K)
+    rot = C('kms', 'enable_key_rotation', KeyId=K)
+    pol_py = (f"ssm = boto3.client('ssm', region_name={R!r})\n"
+              f"s3.put_bucket_policy(Bucket={B!r}, Policy=ssm.get_parameter(Name={PARAM!r})['Parameter']['Value'])")
+    pol_cli = (f'aws s3api put-bucket-policy --bucket {B} --region {R} --policy '
+               f'"$(aws ssm get-parameter --name {PARAM} --query Parameter.Value --output text --region {R})"')
+    code = '\n'.join([enc.code(), pol_py, pab.code().split('\n', 1)[1], rot.code()])
+    cli = '\n'.join([enc.cli(), pol_cli, pab.cli(), rot.cli()])
+    return enc, pab, rot, code, cli
+
+
+def fix():
+    enc, pab, rot, _, _ = fix_parts()
+    enc()
+    C('s3', 'put_bucket_policy', Bucket=B, Policy=cl('ssm').get_parameter(Name=PARAM)['Parameter']['Value'])()
+    pab()
+    rot()
+
+
+def decommission():
+    """Delete the offshore originals, but only the parts whose copy in the approved region is verified."""
+    if legacy_table_state() == 'deleted' and legacy_instance_state() in ('none', 'terminated', 'shutting-down'):
+        return res('allowed', f'decommission offshore copies in {LR}', f'Already decommissioned: nothing of the bank is left in {LR}.')
+    counts = {}
+    for t, r in ((LT, LR), (DT, R)):
+        try:
+            counts[t] = cl('dynamodb', r).scan(TableName=t, Select='COUNT')['Count']
+        except Exception:
+            counts[t] = None
+    db_ok = counts[LT] is not None and counts[DT] is not None and counts[DT] >= counts[LT] > 0
+    imgs = cl('ec2').describe_images(Owners=['self'], Filters=[{'Name': 'name', 'Values': [f'{P}-{EC2_NAME}']}])['Images']
+    ec2_ok = any(i['State'] == 'available' for i in imgs)
+    if not (db_ok or ec2_ok):
+        return res('error', 'decommission offshore copies',
+                   f'Nothing verified yet: the migrated table has {counts[DT]} of {counts[LT]} records and no migrated image '
+                   'is available. Migrate first; the offshore originals are only deleted once their copy is verified.')
+    steps, notes = [], []
+    if db_ok:
+        notes.append(f'database verified: {counts[DT]} of {counts[LT]} records in {R}')
+        steps.append(C('dynamodb', 'delete_table', LR, TableName=LT))
+    else:
+        notes.append(f'database NOT deleted: only {counts[DT]} of {counts[LT]} records copied')
+    if ec2_ok:
+        notes.append(f'server image verified in {R}')
+        if LINST:
+            steps.append(C('ec2', 'terminate_instances', LR, InstanceIds=[LINST]))
+        try:
+            old = cl('ec2', LR).describe_images(ImageIds=[LAMI])['Images']
+        except ClientError:
+            old = []
+        snaps = [b['Ebs']['SnapshotId'] for i in old for b in i.get('BlockDeviceMappings', []) if b.get('Ebs', {}).get('SnapshotId')]
+        if old:
+            steps.append(C('ec2', 'deregister_image', LR, ImageId=LAMI))
+        steps += [C('ec2', 'delete_snapshot', LR, SnapshotId=sid) for sid in snaps]
+    else:
+        notes.append('server NOT deleted: no migrated image available yet')
+    results, verdict = [], 'allowed'
+    for c in steps:
+        r = attempt(c.op, c)
+        results.append(f"{c.op}: {r['verdict']}")
+        if r['verdict'] != 'allowed':
+            verdict = r['verdict']
+            results[-1] += f" ({r['detail'][:120]})"
+    vtext = (f"# verified first: {counts[DT]} of {counts[LT]} records and the server image are in {R}\n" if db_ok and ec2_ok
+             else '# verified first: ' + '; '.join(notes) + '\n')
+    seen, py = set(), []
+    for c in steps:  # one client line per service, then each call
+        head, body = c.code().split('\n', 1)
+        if (c.svc, c.region) not in seen:
+            seen.add((c.svc, c.region))
+            py.append(head)
+        py.append(body)
+    code = vtext + '\n'.join(py)
+    cli = vtext + '\n'.join(c.cli() for c in steps)
+    return res(verdict, f'decommission offshore copies in {LR}', '. '.join(notes + results) + '.', code, cli)
+
+
+RESET_PY = """ec2 = boto3.client('ec2', region_name={R!r})
+ec2.terminate_instances(InstanceIds=[...])            # the migrated server
+ec2.deregister_image(ImageId=...)                     # the copied image
+ec2.delete_snapshot(SnapshotId=...)                   # and its snapshot
+dest = boto3.client('dynamodb', region_name={R!r})
+dest.batch_write_item(RequestItems={{{DT!r}: [{{'DeleteRequest': ...}}]}})   # empty the migrated table"""
+RESET_CLI = """aws ec2 terminate-instances --instance-ids <migrated-server> --region {R}
+aws ec2 deregister-image --image-id <copied-ami> --region {R}
+aws ec2 delete-snapshot --snapshot-id <its-snapshot> --region {R}
+aws dynamodb batch-write-item --request-items file://delete-all.json --region {R}"""
 
 
 def act(p):
     a = p.get('action')
-    s3 = cl('s3')
     if a == 'migDb':
         if get('db').get('state') != 'running':
             put('db', {'state': 'running', 'moved': 0, 'total': 0})
             start('db')
-        return res('allowed', 'dynamodb scan (legacy) -> batch-write-item (approved region)', 'Database migration started.')
+        return res('allowed', 'dynamodb scan (legacy) -> batch-write-item (approved region)', 'Database migration started.', *code_db())
     if a == 'migEc2':
         if get('ec2').get('state') not in ('copying', 'launching'):
             put('ec2', {'state': 'copying'})
             start('ec2')
-        return res('allowed', 'ec2 copy-image (legacy -> approved, re-encrypted) then run-instances', 'Server migration started; the image copy takes several minutes.')
+        return res('allowed', 'ec2 copy-image (legacy -> approved, re-encrypted) then run-instances',
+                   'Server migration started; the image copy takes several minutes.', *code_ec2())
     if a == 'migReset':
         reset()
-        return res('allowed', 'terminate instance, deregister image, clear migrated table', 'Migration reset. The legacy side is untouched.')
+        return res('allowed', 'terminate instance, deregister image, clear migrated table', 'Migration reset. The legacy side is untouched.',
+                   RESET_PY.format(R=R, DT=DT), RESET_CLI.format(R=R))
+    if a == 'migClean':
+        return decommission()
     if a == 'migOutDb':
-        return attempt('dynamodb:PutItem into us-east-1', lambda: cl('dynamodb', 'us-east-1').put_item(TableName=DT, Item={'payment_id': {'S': 'PAY-OUT'}}))
+        return attempt('dynamodb:PutItem into us-east-1', C('dynamodb', 'put_item', 'us-east-1', TableName=DT, Item={'payment_id': {'S': 'PAY-OUT'}}))
     if a == 'migOutEc2':
-        return attempt('ec2:CopyImage into us-east-1', lambda: cl('ec2', 'us-east-1').copy_image(Name='exfil', SourceImageId='ami-00000000000000000', SourceRegion=R))
+        return attempt('ec2:CopyImage into us-east-1', C('ec2', 'copy_image', 'us-east-1', Name='exfil', SourceImageId='ami-00000000000000000', SourceRegion=R))
     if a == 'replAdmin':
         rc = {'Role': f'arn:aws:iam::{ACCT}:role/dummy-replication-role', 'Rules': [{
             'ID': 'offshore', 'Status': 'Enabled', 'Priority': 1, 'Filter': {}, 'DeleteMarkerReplication': {'Status': 'Disabled'},
             'Destination': {'Bucket': 'arn:aws:s3:::dummy-destination-bucket'}}]}
-        return attempt('s3:PutBucketReplication as an admin-level role', lambda: s3.put_bucket_replication(Bucket=B, ReplicationConfiguration=rc))
+        return attempt('s3:PutBucketReplication as an admin-level role', C('s3', 'put_bucket_replication', Bucket=B, ReplicationConfiguration=rc))
     drift = {
-        'enc': ('s3:DeleteBucketEncryption', lambda: s3.delete_bucket_encryption(Bucket=B)),
-        'ssl': ('s3:DeleteBucketPolicy', lambda: s3.delete_bucket_policy(Bucket=B)),
-        'pub': ('s3:PutPublicAccessBlock (all off)', lambda: s3.put_public_access_block(Bucket=B, PublicAccessBlockConfiguration={
+        'enc': ('s3:DeleteBucketEncryption', C('s3', 'delete_bucket_encryption', Bucket=B)),
+        'ssl': ('s3:DeleteBucketPolicy', C('s3', 'delete_bucket_policy', Bucket=B)),
+        'pub': ('s3:PutPublicAccessBlock (all off)', C('s3', 'put_public_access_block', Bucket=B, PublicAccessBlockConfiguration={
             'BlockPublicAcls': False, 'IgnorePublicAcls': False, 'BlockPublicPolicy': False, 'RestrictPublicBuckets': False})),
-        'rot': ('kms:DisableKeyRotation', lambda: cl('kms').disable_key_rotation(KeyId=K))}
+        'rot': ('kms:DisableKeyRotation', C('kms', 'disable_key_rotation', KeyId=K))}
     if a in drift:
         return attempt(*drift[a])
     if a == 'fix':
-        return attempt('restore encryption, bucket policy, Block Public Access and rotation', fix,
+        _, _, _, code, cli = fix_parts()
+        return attempt('restore encryption, bucket policy, Block Public Access and rotation', (fix, code, cli),
                        'Encryption, bucket policy, Block Public Access and key rotation restored.')
     raise ValueError('unknown action')
 

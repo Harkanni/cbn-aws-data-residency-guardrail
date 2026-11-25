@@ -83,6 +83,13 @@ resource "aws_iam_role_policy" "presenter_allow" {
         ]
       },
       {
+        # Decommission step: only the OFFSHORE table can be deleted, never the migrated one.
+        Sid      = "DecommissionLegacyTable"
+        Effect   = "Allow"
+        Action   = "dynamodb:DeleteTable"
+        Resource = aws_dynamodb_table.legacy.arn
+      },
+      {
         Sid    = "ImageAndServerMigration"
         Effect = "Allow"
         Action = [
@@ -167,6 +174,7 @@ resource "aws_lambda_function" "presenter" {
       LEGACY_TABLE    = aws_dynamodb_table.legacy.name
       DEST_TABLE      = aws_dynamodb_table.migrated.name
       LEGACY_AMI      = aws_ami_from_instance.legacy.id
+      LEGACY_INSTANCE = aws_instance.legacy.id
       DEMO_KEY        = random_password.demo_key.result
       STATE_TABLE     = aws_dynamodb_table.demo_state.name
       POLICY_PARAM    = aws_ssm_parameter.bucket_policy.name

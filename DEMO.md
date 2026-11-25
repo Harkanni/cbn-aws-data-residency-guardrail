@@ -92,42 +92,54 @@ aws kms describe-key --key-id "$KEY" --query 'KeyMetadata.{MultiRegion:MultiRegi
 aws kms get-key-rotation-status --key-id "$KEY"
 ```
 
-## 8. Migration: inbound only (eu-west-1 → af-south-1)
+## 8. Migration: inbound only, then decommission (eu-west-1 → af-south-1)
 
-These match the migration in the architecture diagram. The first block finds the resource names.
+Names come straight from Terraform:
 
 ```bash
-MIGRATOR=$(aws iam list-roles --query "Roles[?contains(RoleName,'migrator')].Arn | [0]" --output text); echo "$MIGRATOR"
-aws dynamodb list-tables --region eu-west-1      # legacy payments table
-aws dynamodb list-tables --region af-south-1     # migrated payments table
-LEGACY_TABLE=<legacy table name>; NEW_TABLE=<migrated table name>
+MIGRATOR="arn:aws:iam::$ACCT:role/region-lock-demo-migrator"
+LEGACY_TABLE=$(terraform output -raw mig_legacy_table)     # in eu-west-1 (Europe, Ireland)
+NEW_TABLE=$(terraform output -raw mig_dest_table)          # in af-south-1 (Africa, Cape Town)
+LEGACY_AMI=$(terraform output -raw mig_legacy_ami); LEGACY_INSTANCE=$(terraform output -raw mig_legacy_instance)
 ```
 
-What landed in Nigeria's stand-in region, and under whose key:
+Run the migration from the live page (Presenter mode) or the laptop console, then check what landed, and under whose key.
+In the AWS console, switch the region (top right) to **Africa (Cape Town) af-south-1**; the console's item count
+only refreshes every few hours, so use "Explore table items" or the commands below for a live count:
 
 ```bash
+aws dynamodb scan --table-name "$NEW_TABLE" --region af-south-1 --select COUNT                  # 30 after migrating
 aws dynamodb describe-table --table-name "$NEW_TABLE" --region af-south-1 \
-  --query 'Table.{Items:ItemCount,SSE:SSEDescription.SSEType,Key:SSEDescription.KMSMasterKeyArn}' --output table
-aws dynamodb scan --table-name "$NEW_TABLE" --region af-south-1 --select COUNT
+  --query 'Table.SSEDescription.{SSE:SSEType,Key:KMSMasterKeyArn}' --output table              # KMS, the bank's key
 aws ec2 describe-images --owners self --region af-south-1 \
-  --query 'Images[].[Name,BlockDeviceMappings[0].Ebs.Encrypted,BlockDeviceMappings[0].Ebs.KmsKeyId]' --output table
-aws ec2 describe-instances --region af-south-1 --filters Name=instance-state-name,Values=running \
-  --query 'Reservations[].Instances[].[InstanceId,ImageId,State.Name]' --output table
+  --query 'Images[].[Name,State,BlockDeviceMappings[0].Ebs.KmsKeyId]' --output table
+aws ec2 describe-instances --region af-south-1 --filters Name=tag:Name,Values=migrated-payments-app \
+  --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output table
 ```
 
-The migrator can read from offshore but cannot write anywhere except af-south-1:
+The migrator can read offshore and delete offshore, but never write offshore:
 
 ```bash
 as_role "$MIGRATOR"
-aws dynamodb scan --table-name "$LEGACY_TABLE" --region eu-west-1 --select COUNT                           # Allowed (read in)
+aws dynamodb scan --table-name "$LEGACY_TABLE" --region eu-west-1 --select COUNT                # Allowed (read in)
 aws dynamodb put-item --table-name "$LEGACY_TABLE" --region eu-west-1 \
-  --item '{"id":{"S":"out-test"}}'                                                                          # Denied (write out)
-aws s3api create-bucket --bucket "offshore-copy-$ACCT" --region eu-west-1 \
-  --create-bucket-configuration LocationConstraint=eu-west-1                                                # Denied
+  --item '{"payment_id":{"S":"OUT"}}'                                                          # Denied (write out)
+aws dynamodb put-item --table-name "$NEW_TABLE" --region us-east-1 \
+  --item '{"payment_id":{"S":"OUT"}}'                                                          # Denied (any other region)
 as_admin
 ```
 
-If `id` isn't the table's key name, check it with `aws dynamodb describe-table --table-name "$LEGACY_TABLE" --region eu-west-1 --query Table.KeySchema`.
+After "Decommission offshore copies" (only runs once the copy is verified), nothing is left in eu-west-1:
+
+```bash
+aws dynamodb describe-table --table-name "$LEGACY_TABLE" --region eu-west-1        # ResourceNotFoundException
+aws ec2 describe-images --image-ids "$LEGACY_AMI" --region eu-west-1               # no image / InvalidAMIID
+aws ec2 describe-instances --instance-ids "$LEGACY_INSTANCE" --region eu-west-1 \
+  --query 'Reservations[].Instances[].State.Name'                                  # terminated
+```
+
+To replay the demo: `./deploy.sh fix` rebuilds the legacy side (Terraform recreates the table, the 30 records, the
+server and its image), then click "Reset migration" to empty the migrated side.
 
 ## 9. Evidence: drift, alerts, audit trail
 

@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import os
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -79,7 +80,20 @@ def probe(args, who='operator'):
         verdict = 'denied'
     else:
         verdict = 'error'
-    return {'verdict': verdict, 'who': who, 'cmd': 'aws ' + ' '.join(args), 'detail': text[:600] or 'OK'}
+    return {'verdict': verdict, 'who': who, 'cmd': 'aws ' + ' '.join(args), 'detail': text[:600] or 'OK',
+            'cli': shown(['aws'] + args), 'role': who if who == 'admin' else f'{PREFIX}-{who}', 'source': 'server.py (AWS CLI)'}
+
+
+def shown(args):
+    """The exact command line that ran, for the console's code panel: temp-file paths shortened, account masked."""
+    tmp = tempfile.gettempdir().replace('\\', '/')
+    out = []
+    for a in args:
+        a = a.replace('\\', '/')
+        if tmp in a:
+            a = a.split(tmp, 1)[0] + a.rsplit('/', 1)[-1]   # file:///tmp/abc/repl.json -> file://repl.json
+        out.append(shlex.quote(a))
+    return ' '.join(out).replace(CFG.get('acct') or '\0', '************')
 
 
 def probe_service(p):
@@ -111,7 +125,8 @@ def terraform_apply():
     e = dict(os.environ, TF_VAR_approved_region=REGION, TF_VAR_name_prefix=PREFIX)
     if os.environ.get('ALERT_EMAIL'):
         e['TF_VAR_alert_email'] = os.environ['ALERT_EMAIL']
-    meta = {'who': 'admin', 'cmd': 'terraform apply -auto-approve'}
+    meta = {'who': 'admin', 'cmd': 'terraform apply -auto-approve', 'cli': 'terraform apply -auto-approve -input=false',
+            'role': 'admin', 'source': 'server.py'}
     try:
         p = subprocess.run(['terraform', 'apply', '-auto-approve', '-input=false', '-no-color'], cwd=HERE,
                            capture_output=True, text=True, env=e, timeout=420)
@@ -183,6 +198,78 @@ def mig_ec2():
         MIG.update(ec2='error', error=str(e))
 
 
+def legacy_table_state(m):
+    rc, o, e = aws(['dynamodb', 'describe-table', '--table-name', m['legacy_table'], '--region', m['legacy_region'],
+                    '--output', 'json'], role_env('migrator'))
+    if rc == 0:
+        return json.loads(o)['Table']['TableStatus'].lower()
+    return 'deleted' if 'ResourceNotFoundException' in (e or o) else 'unknown'
+
+
+def legacy_instance_state(m):
+    if not m.get('legacy_instance'):
+        return 'unknown'
+    rc, o, e = aws(['ec2', 'describe-instances', '--instance-ids', m['legacy_instance'], '--region', m['legacy_region'],
+                    '--output', 'json'], role_env('migrator'))
+    if rc == 0:
+        ins = [i for r in json.loads(o)['Reservations'] for i in r['Instances']]
+        return ins[0]['State']['Name'] if ins else 'none'
+    return 'none' if 'NotFound' in (e or o) else 'unknown'
+
+
+def mig_clean():
+    """Decommission the offshore originals, but only the parts whose copy in the approved region is verified."""
+    m = CFG['mig']
+    meta = {'who': 'migrator', 'role': f'{PREFIX}-migrator', 'source': 'server.py (AWS CLI)',
+            'cmd': f"decommission offshore copies in {m['legacy_region']}"}
+    if legacy_table_state(m) == 'deleted' and legacy_instance_state(m) in ('none', 'terminated', 'shutting-down'):
+        return dict(meta, verdict='allowed', detail=f"Already decommissioned: nothing of the bank is left in {m['legacy_region']}.")
+
+    def count(t, r):
+        try:
+            return mj(['dynamodb', 'scan', '--table-name', t, '--select', 'COUNT'], r)['Count']
+        except Exception:
+            return None
+    lc, dc = count(m['legacy_table'], m['legacy_region']), count(m['dest_table'], REGION)
+    db_ok = lc is not None and dc is not None and dc >= lc > 0
+    imgs = mj(['ec2', 'describe-images', '--owners', 'self', '--filters', f'Name=name,Values={PREFIX}-{EC2_NAME}'], REGION)['Images']
+    ec2_ok = any(i['State'] == 'available' for i in imgs)
+    if not (db_ok or ec2_ok):
+        return dict(meta, verdict='error', detail=f'Nothing verified yet: the migrated table has {dc} of {lc} records and no migrated '
+                    'image is available. Migrate first; the offshore originals are only deleted once their copy is verified.')
+    L, steps, notes = m['legacy_region'], [], []
+    if db_ok:
+        notes.append(f'database verified: {dc} of {lc} records in {REGION}')
+        steps.append(['dynamodb', 'delete-table', '--table-name', m['legacy_table'], '--region', L])
+    else:
+        notes.append(f'database NOT deleted: only {dc} of {lc} records copied')
+    if ec2_ok:
+        notes.append(f'server image verified in {REGION}')
+        if m.get('legacy_instance'):
+            steps.append(['ec2', 'terminate-instances', '--instance-ids', m['legacy_instance'], '--region', L])
+        try:
+            old = mj(['ec2', 'describe-images', '--image-ids', m['legacy_ami']], L)['Images']
+        except RuntimeError:
+            old = []
+        if old:
+            steps.append(['ec2', 'deregister-image', '--image-id', m['legacy_ami'], '--region', L])
+        for i in old:
+            for b in i.get('BlockDeviceMappings', []):
+                if b.get('Ebs', {}).get('SnapshotId'):
+                    steps.append(['ec2', 'delete-snapshot', '--snapshot-id', b['Ebs']['SnapshotId'], '--region', L])
+    else:
+        notes.append('server NOT deleted: no migrated image available yet')
+    verdict, results = 'allowed', []
+    for args in steps:
+        r = probe(args, 'migrator')
+        results.append(f"{args[1]}: {r['verdict']}")
+        if r['verdict'] != 'allowed':
+            verdict = r['verdict']
+            results[-1] += f" ({r['detail'][:120]})"
+    head = '# verified first: ' + '; '.join(notes) + '\n'
+    return dict(meta, verdict=verdict, detail='. '.join(notes + results) + '.', cli=head + '\n'.join(shown(['aws'] + a) for a in steps))
+
+
 def mig_status():
     m = CFG.get('mig')
     if not m:
@@ -214,17 +301,22 @@ def mig_status():
             return 'none'
 
     jobs = {'lrows': lambda: count(m['legacy_table'], m['legacy_region']), 'drows': lambda: count(m['dest_table'], R),
-            'limg': lambda: image(m['legacy_region'], id=m['legacy_ami']), 'dimg': lambda: image(R), 'dins': instance}
-    with ThreadPoolExecutor(5) as ex:
+            'limg': lambda: image(m['legacy_region'], id=m['legacy_ami']), 'dimg': lambda: image(R), 'dins': instance,
+            'ltab': lambda: legacy_table_state(m), 'lins': lambda: legacy_instance_state(m)}
+    with ThreadPoolExecutor(7) as ex:
         futs = {k: ex.submit(f) for k, f in jobs.items()}
         r = {k: f.result() for k, f in futs.items()}
     return {'enabled': True, 'legacy_region': m['legacy_region'], 'region': R,
-            'legacy': {'rows': r['lrows'], 'image': r['limg']},
+            'legacy_table': m['legacy_table'], 'dest_table': m['dest_table'],
+            'legacy': {'rows': r['lrows'], 'image': r['limg'], 'table': r['ltab'], 'instance': r['lins']},
             'dest': {'rows': r['drows'], 'image': r['dimg'], 'instance': r['dins']}, 'job': dict(MIG)}
 
 
 def mig_reset():
     m = CFG['mig']
+    if legacy_table_state(m) == 'deleted':
+        raise RuntimeError('The offshore copies are decommissioned, so the migrated data is now the only copy. '
+                           'Rebuild the legacy side first (./deploy.sh fix), then reset.')
     if MIG['db'] == 'running' or MIG['ec2'] in ('copying', 'launching'):
         raise RuntimeError('a migration is still running')
     d = mj(['ec2', 'describe-instances', '--filters', f'Name=tag:Name,Values={EC2_NAME}',
@@ -257,11 +349,23 @@ def mig_act(a):
     if a == 'migDb':
         if MIG['db'] != 'running':
             threading.Thread(target=mig_db, daemon=True).start()
-        return dict(meta, cmd='dynamodb scan (legacy) -> batch-write-item (approved region)', detail='Database migration started.')
+        return dict(meta, cmd='dynamodb scan (legacy) -> batch-write-item (approved region)', detail='Database migration started.',
+                    role=f'{PREFIX}-migrator', source='server.py (AWS CLI)',
+                    cli=f"aws dynamodb scan --table-name {m['legacy_table']} --region {m['legacy_region']}\n"
+                        f"# then, 5 records at a time, into the approved region:\n"
+                        f"aws dynamodb batch-write-item --request-items file://batch.json --region {REGION}")
     if a == 'migEc2':
         if MIG['ec2'] not in ('copying', 'launching'):
             threading.Thread(target=mig_ec2, daemon=True).start()
-        return dict(meta, cmd='ec2 copy-image (legacy -> approved, re-encrypted) then run-instances', detail='Server migration started; the image copy takes several minutes.')
+        return dict(meta, cmd='ec2 copy-image (legacy -> approved, re-encrypted) then run-instances',
+                    detail='Server migration started; the image copy takes several minutes.',
+                    role=f'{PREFIX}-migrator', source='server.py (AWS CLI)',
+                    cli=(f"aws ec2 copy-image --name {PREFIX}-{EC2_NAME} --source-image-id {m['legacy_ami']} --source-region "
+                         f"{m['legacy_region']} --encrypted --kms-key-id {CFG['key']} --region {REGION}\n"
+                         f"aws ec2 run-instances --image-id <new-ami> --instance-type t3.micro --count 1 --region {REGION}"
+                         ).replace(CFG['acct'], '************'))
+    if a == 'migClean':
+        return mig_clean()
     if a == 'migReset':
         mig_reset()
         return dict(meta, cmd='terminate instance, deregister image, clear migrated table', detail='Migration reset. The legacy side is untouched.')
@@ -294,7 +398,8 @@ def act(a, p):
     if a == 'upKey':
         return probe(put + kms + ['alias/aws/s3'])
     if a == 'upHttp':
-        return probe(put + kms + [K, '--endpoint-url', f'http://s3.{R}.amazonaws.com'])
+        # No SSE-KMS headers: S3 rejects SSE-KMS over HTTP before the bucket policy runs, hiding DenyNonTLS.
+        return probe(put + ['--endpoint-url', f'http://s3.{R}.amazonaws.com'])
     if a in ('repl', 'replAdmin'):
         cfg = tmp / 'repl.json'
         cfg.write_text(json.dumps({'Role': f"arn:aws:iam::{CFG['acct']}:role/dummy-replication-role", 'Rules': [{
@@ -451,6 +556,7 @@ def main():
     t = {k: out.get(k, {}).get('value') for k in ('mig_legacy_region', 'mig_legacy_table', 'mig_dest_table', 'mig_legacy_ami')}
     if all(t.values()):
         CFG['mig'] = {k[4:]: v for k, v in t.items()}
+        CFG['mig']['legacy_instance'] = out.get('mig_legacy_instance', {}).get('value')
     operator()
     url = f'http://127.0.0.1:{PORT}/?t={TOKEN}'
     print(f'Account {CFG["acct"]} | region {REGION} | bucket {CFG["bucket"]}\nOpen: {url}\nCtrl+C to stop.')

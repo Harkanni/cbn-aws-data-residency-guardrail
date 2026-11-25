@@ -41,7 +41,7 @@ li small{display:block;color:var(--mu);font-size:12px;margin-top:3px;word-break:
 .mail{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px}
 .mail pre{margin:6px 0 0;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--mu)}
 .empty{color:var(--mu);font-size:13px}
-@media (max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}.kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--bd);font-size:13.5px}.kv:first-of-type{border-top:0}
 .mg-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.mg-btns button{flex:1;min-width:150px}
 #mig svg{width:100%;height:auto;display:block}#mig svg text{fill:var(--tx);font:13px system-ui,sans-serif}#mig svg .sub{fill:var(--mu);font-size:12px}#mig svg .ttl{font-weight:600}
@@ -71,6 +71,39 @@ body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,
 @keyframes pop{0%{opacity:0;transform:scale(.3)}15%{opacity:1;transform:scale(1.25)}25%{transform:scale(1)}80%{opacity:1}100%{opacity:0}}
 #blockX circle{fill:var(--bad)}#blockX path{stroke:var(--card);stroke-width:3;stroke-linecap:round}
 #denyBox{transform-box:fill-box;transform-origin:center}
+/* code panel: always a dark terminal, in both themes */
+.code-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.code-head h2{margin:0}
+.tabs{display:flex;gap:4px;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:3px}
+.tab{border:0;background:transparent;padding:5px 10px;font-size:12.5px;border-radius:6px;text-align:center}
+.tab.on{background:var(--card);box-shadow:0 0 0 1px var(--bd)}
+.term{background:#111418;border-radius:10px;margin-top:10px;overflow:hidden;border:1px solid #23282f}
+.term-bar{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid #23282f}
+.term-bar .dot{width:9px;height:9px;border-radius:50%;background:#3a4049}
+.term-t{flex:1;min-width:0;color:#9aa4b1;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;margin-left:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.copy{background:#1c2128;color:#cfd6df;border-color:#2b323b;font-size:12px;padding:4px 10px;text-align:center}
+.term-code,.term-out{margin:0;padding:12px 14px;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#d7dde5}
+.term-code{max-height:340px;overflow:auto}
+.term-out{border-top:1px dashed #2b323b;color:#9aa4b1}
+.term-out.bad{color:#ff8f8f}.term-out.ok{color:#9fe08a}.term-out.wn{color:#f3c76b}
+.term-out.run::after{content:'…';animation:blink 1s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
+.term .ln{display:block;animation:lnIn .32s ease-out both;animation-delay:calc(var(--i) * 45ms)}
+@keyframes lnIn{from{opacity:0;transform:translateX(-6px)}}
+.term .c{color:#7f8b99}.term .s{color:#a8d99c}.term .k{color:#d4a6f5}.term .fn{color:#86b8ff}.term .f{color:#f3c76b}
+li.clk{cursor:pointer;border-radius:6px}li.clk:hover{background:var(--bg)}li.sel{background:var(--acb)}
+/* migration steps and decommission */
+.steps{display:flex;gap:8px;flex-wrap:wrap;list-style:none;margin:12px 0 0;padding:0;max-height:none;overflow:visible}
+.steps li{border:1px solid var(--bd);border-radius:999px;padding:5px 12px 5px 6px;font-size:13px;color:var(--mu);border-top:1px solid var(--bd)}
+.steps li b{display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:var(--bd);color:var(--tx);font-size:11.5px;margin-right:6px}
+.steps li.done{border-color:var(--ok);color:var(--ok)}.steps li.done b{background:var(--ok);color:var(--card)}
+.steps li.now{border-color:var(--ac);color:var(--ac)}.steps li.now b{background:var(--ac);color:var(--card)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.warn{border-color:var(--bad);color:var(--bad)}
+#mig .tile.gone{stroke-dasharray:4 4;opacity:.55}
+#mig .tile.vanish{animation:vanish 1.6s ease-out}
+@keyframes vanish{0%{opacity:1;stroke:var(--bad);stroke-width:4;fill:var(--badb)}100%{opacity:.55}}
+.where{margin-top:8px}
 #denyBox.shake{animation:shake .5s ease-in-out}
 #denyBox.shake rect{stroke:var(--bad);fill:var(--badb)}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
@@ -116,12 +149,15 @@ body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,
       <g id="g_p_out"><path id="p_out" class="flow" d="M545 256 C545 300 480 305 434 305"/><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="0.6s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle><circle class="dot" r="5"><animateMotion dur="1.8s" begin="1.2s" repeatCount="indefinite"><mpath href="#p_out"/></animateMotion></circle></g>
       <g id="blockX" aria-hidden="true"><circle cx="434" cy="305" r="14"/><path d="M428 299 L440 311 M440 299 L428 311"/></g>
     </svg>
+    <ol class="steps" id="mgSteps" aria-label="Migration steps"><li id="st1"><b>1</b>Migrate in</li><li id="st2"><b>2</b><span id="st2t">Verify the copy</span></li><li id="st3"><b>3</b>Decommission offshore</li></ol>
+    <p class="mu where" id="mgWhere"></p>
     <p class="viewer" id="mgViewer" style="display:none">You are watching live. The presenter runs the migration; this view updates by itself.</p>
     <div class="mg-btns" id="mgBtns">
       <button class="go" data-m="migDb">Migrate the database</button>
       <button class="go" data-m="migEc2">Migrate the EC2 server</button>
       <button data-m="migOutDb">Try to move data OUT (database)</button>
       <button data-m="migOutEc2">Try to move the server OUT</button>
+      <button data-m="migClean" id="mgClean" class="warn" disabled>Decommission offshore copies</button>
       <button data-m="migReset">Reset migration</button>
     </div>
     <p class="mu" style="margin-top:8px" id="mgNote">Image copies take several minutes. Click Reset before running <code>./deploy.sh destroy</code>.</p>
@@ -163,6 +199,16 @@ body.busy button{opacity:.5;pointer-events:none}.cmd{font:12px/1.4 ui-monospace,
       </div>
     </div>
     <div>
+      <div class="card" id="codeCard">
+        <div class="code-head"><h2>Code running in AWS</h2>
+          <div class="tabs" role="tablist" aria-label="Code view"><button type="button" class="tab on" id="tabPy" role="tab">Python (boto3)</button><button type="button" class="tab" id="tabCli" role="tab">AWS CLI</button></div></div>
+        <p class="mu" id="codeMeta">Press any button. This shows the exact call made to AWS behind it, then AWS’s answer. Click an event below to see its code again.</p>
+        <div class="term">
+          <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-t" id="codeSrc">waiting for the first call</span><button type="button" class="copy" id="codeCopy">Copy</button></div>
+          <pre class="term-code" id="codeBox"><code id="codeTxt"><span class="c"># Nothing has run yet.</span></code></pre>
+          <pre class="term-out" id="codeOut">AWS’s answer appears here.</pre>
+        </div>
+      </div>
       <div class="card"><h2>AWS Config rules (live)</h2><div id="rules"><p class="empty">Loading…</p></div><p class="mu" style="margin-top:8px">Config re-evaluates a few minutes after a change. <a href="#" id="ref">Refresh now</a></p></div>
       <div class="card"><h2>Live resource configuration</h2><div id="cfg"><p class="empty">Loading…</p></div></div>
       <div class="card"><h2>Alert path</h2><div id="alerts"><p class="empty">Loading…</p></div></div>
@@ -177,7 +223,7 @@ function sset(k,v){try{if(v)sessionStorage.setItem(k,v);else sessionStorage.remo
 var LOCALHOST=/^(127\.0\.0\.1|localhost)$/.test(location.hostname);
 var MODE=LOCALHOST?'local':'public',KEY=sget('demoKey')||'';
 // Actions that change real resources: on the public site they go to the presenter API with the demo key.
-var PRES={migDb:1,migEc2:1,migOutDb:1,migOutEc2:1,migReset:1,replAdmin:1,enc:1,ssl:1,pub:1,rot:1,fix:1};
+var PRES={migDb:1,migEc2:1,migOutDb:1,migOutEc2:1,migClean:1,migReset:1,replAdmin:1,enc:1,ssl:1,pub:1,rot:1,fix:1};
 function needsKey(a){return MODE==='public'&&!!PRES[a]}
 var $=function(i){return document.getElementById(i)};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
@@ -195,17 +241,55 @@ function applyMode(){
 }
 function lock(msg){KEY='';sset('demoKey','');applyMode();$('pMsg').textContent=msg||''}
 function chip(c,s){return '<span class="chip '+c+'">'+s+'</span>'}
+// ---- code panel: the exact call behind each button, then AWS's answer ----
+var CUR=null,TAB=sget('codeTab')==='cli'?'cli':'code';
+function hl(src,cli){
+  var s=esc(src);
+  if(cli)return s.replace(/(#.*$)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\s--[\w-]+)|^(aws|terraform)(?=\s)/gm,function(m,c,str,fl,cmd){
+    return c?'<span class="c">'+c+'</span>':str?'<span class="s">'+str+'</span>':fl?'<span class="f">'+fl+'</span>':'<span class="k">'+cmd+'</span>'});
+  return s.replace(/(#.*$)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|\b(True|False|None|for|in|range|len)\b|\.(\w+)(?=\()/gm,function(m,c,str,kw,fn){
+    return c?'<span class="c">'+c+'</span>':str?'<span class="s">'+str+'</span>':kw?'<span class="k">'+kw+'</span>':'.<span class="fn">'+fn+'</span>'});
+}
+function paint(){
+  var r=CUR;if(!r)return;
+  var t=(TAB==='code'&&r.code)||!r.cli?'code':'cli';
+  $('tabPy').hidden=!r.code;$('tabPy').classList.toggle('on',t==='code');$('tabCli').classList.toggle('on',t==='cli');
+  $('tabPy').setAttribute('aria-selected',t==='code');$('tabCli').setAttribute('aria-selected',t==='cli');
+  var src=r[t]||'# This step has no AWS call to show.';
+  $('codeTxt').innerHTML=hl(src,t==='cli').split('\n').map(function(l,i){return '<span class="ln" style="--i:'+Math.min(i,20)+'">'+(l||' ')+'</span>'}).join('');
+  $('codeBox').scrollTop=0;
+}
+function showCode(r,title,when){
+  CUR=r;paint();
+  $('codeSrc').textContent=(r.source||'')+(r.role?' · runs as '+r.role:'');
+  var v={denied:['bad','DENIED by AWS'],allowed:['ok','ALLOWED by AWS'],error:['wn','ERROR']}[r.verdict]||['wn','ERROR'];
+  $('codeOut').className='term-out '+v[0];$('codeOut').textContent='→ '+v[1]+(r.detail?' · '+r.detail:'');
+  $('codeMeta').textContent=title+' · '+(when||t())+(r.who?' · as '+r.who:'');
+}
+function pending(title){
+  $('codeMeta').textContent=title+' · sending to AWS';$('codeOut').className='term-out run';$('codeOut').textContent='Waiting for AWS';
+}
+$('tabPy').onclick=function(){TAB='code';sset('codeTab','code');paint()};
+$('tabCli').onclick=function(){TAB='cli';sset('codeTab','cli');paint()};
+$('codeCopy').onclick=function(){
+  if(!CUR)return;var t=(TAB==='code'&&CUR.code)||!CUR.cli?'code':'cli',b=$('codeCopy');
+  try{navigator.clipboard.writeText(CUR[t]||'').then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1200)})}catch(e){}
+};
 function log(title,r){
   var c={denied:['c-bad','DENIED'],allowed:['c-ok','ALLOWED'],error:['c-wn','ERROR']}[r.verdict]||['c-wn','ERROR'];
-  var li=document.createElement('li');
-  li.innerHTML=chip(c[0],c[1])+' '+esc(title)+' <span class="mu">· '+t()+(r.who?' · as '+r.who:'')+'</span>'+(r.cmd?'<small class="cmd">$ '+esc(r.cmd)+'</small>':'')+'<small>'+esc(r.detail||'')+'</small>';
+  var li=document.createElement('li'),when=t();
+  li.innerHTML=chip(c[0],c[1])+' '+esc(title)+' <span class="mu">· '+when+(r.who?' · as '+r.who:'')+'</span>'+(r.cmd?'<small class="cmd">$ '+esc(r.cmd)+'</small>':'')+'<small>'+esc(r.detail||'')+'</small>';
+  if(r.code||r.cli){li.className='clk';li.tabIndex=0;li.title='Show the code for this call';
+    li.onclick=li.onkeydown=function(e){if(e.type==='keydown'&&e.key!=='Enter')return;document.querySelectorAll('#log li.sel').forEach(function(x){x.classList.remove('sel')});li.classList.add('sel');showCode(r,title,when)}}
   $('log').insertBefore(li,$('log').firstChild);
   $('sDen').textContent=den;$('sOk').textContent=ok;
+  showCode(r,title,when);
 }
 function run(body,title){
-  if(busy)return;busy=true;document.body.classList.add('busy');
+  if(busy)return;
+  if(body.action==='migClean'&&!confirm('Delete the offshore originals in the legacy region? Only parts whose copy is verified are deleted. Terraform can rebuild them later (./deploy.sh fix).'))return;busy=true;document.body.classList.add('busy');
   var li=document.createElement('li');li.innerHTML=chip('c-ne','RUNNING')+' '+esc(title)+'…';$('log').insertBefore(li,$('log').firstChild);
-  var a=body.action,pres=needsKey(a);
+  var a=body.action,pres=needsKey(a);pending(title);
   if(pres&&!KEY){li.remove();log(title,{verdict:'error',detail:'Presenter key required.'});busy=false;document.body.classList.remove('busy');return}
   api(pres?'/api/presenter/run':'/api/run',body,pres?{'X-Demo-Key':KEY}:null).then(function(r){
     if(pres&&r._status===401)lock('Key rejected. Unlock again.');
@@ -240,7 +324,8 @@ $('pOff').onsubmit=function(e){
 $('pLock').onclick=function(){lock('')};
 applyMode();
 refresh();setInterval(function(){if(!busy&&!document.hidden)refresh()},30000);
-var mgTimer=null,flashT=null,shown={},wasLive={};
+var mgTimer=null,flashT=null,shown={},wasLive={},wasGone={};
+function gone(id,isGone){var el=$(id);if(!isGone)return false;el.setAttribute('class','tile gone');if(wasGone[id]===false)replay(el,'vanish');wasGone[id]=true;return true}
 function setG(id,c){var g=$('g_'+id);g.setAttribute('class',c||'')}
 function replay(el,c){el.classList.remove(c);void el.getBoundingClientRect();el.classList.add(c)}
 function flash(){setG('p_out','bad');replay($('blockX'),'pop');replay($('denyBox'),'shake');clearTimeout(flashT);flashT=setTimeout(function(){setG('p_out','');$('denyBox').classList.remove('shake')},3500)}
@@ -256,8 +341,11 @@ function refreshMig(){
     $('mig').style.display='block';
     var j=s.job,L=s.legacy,D=s.dest,total=j.total||L.rows||0;
     $('lReg').textContent='Legacy: '+s.legacy_region+' (offshore)';$('dReg').textContent=s.region+' (approved)';
-    $('lEc2').textContent=L.image==='available'?'Image ready, server stopped':'Image: '+L.image;
-    tween('lDb',L.rows,' payment records');
+    var lDbGone=L.table==='deleted',lEcGone=L.image==='none'&&/^(terminated|shutting-down|none)$/.test(L.instance||'');
+    if(!gone('tLE',lEcGone)){wasGone.tLE=false;$('tLE').setAttribute('class','tile');$('lEc2').textContent=L.image==='available'?'Image ready, server stopped':'Image: '+L.image}
+    else $('lEc2').textContent='Deleted · decommissioned';
+    if(!gone('tLD',lDbGone)){wasGone.tLD=false;$('tLD').setAttribute('class','tile');if(L.table==='deleting')$('lDb').textContent='Deleting…';else tween('lDb',L.rows,' payment records')}
+    else{shown.lDb=null;$('lDb').textContent='Deleted · decommissioned'}
     var ins=D.instance==='none'?(D.image==='none'?'Not migrated':'Image '+D.image):'Server '+D.instance;
     $('dEc2').textContent=ins;
     tween('dDb',D.rows,' records · KMS-encrypted');
@@ -271,7 +359,15 @@ function refreshMig(){
     $('bar').style.transform='scaleX('+(total?Math.min(1,(dbRun?j.moved:D.rows||0)/total):0)+')';
     $('mgLive').className='livedot'+(dbRun||ecRun?' on':'');
     $('mgWatch').textContent=dbRun||ecRun?'Live · AWS is copying now':'Live view · checks every 15 s';
-    $('mgNote').textContent=j.error?'Error: '+j.error:'Image copies take several minutes. Click Reset before running ./deploy.sh destroy.';
+    var dbDone=D.rows>0&&(lDbGone||(L.rows!=null&&D.rows>=L.rows)),ecDone=D.image==='available'||D.instance==='running',decom=lDbGone&&lEcGone;
+    $('st1').className=dbDone&&ecDone?'done':(dbRun||ecRun?'now':'');
+    $('st2').className=dbDone&&ecDone?'done':(dbDone||ecDone?'now':'');
+    $('st2t').textContent=dbDone?'Verified: '+D.rows+' of '+(L.rows==null?D.rows:L.rows)+' records'+(ecDone?' + server image':''):'Verify the copy';
+    $('st3').className=decom?'done':(dbDone||ecDone?'now':'');
+    $('mgClean').disabled=decom||!(dbDone||ecDone)||dbRun||ecRun;
+    $('mgClean').title=decom?'Already decommissioned':(dbDone||ecDone)?'Delete the offshore originals whose copy is verified':'Migrate first: nothing is deleted until its copy is verified';
+    $('mgWhere').textContent=s.dest_table?'In the AWS console: DynamoDB → Tables, region '+s.region+' → '+s.dest_table+(lDbGone?'. The offshore original ('+s.legacy_table+', '+s.legacy_region+') has been deleted.':'. The offshore original is '+s.legacy_table+' in '+s.legacy_region+'.')+' The console’s item count refreshes only every few hours; use “Explore table items” for a live view.':'';
+    $('mgNote').textContent=j.error?'Error: '+j.error:decom?'Offshore copies decommissioned. To replay the demo, run ./deploy.sh fix to rebuild the legacy side, then Reset.':'Image copies take several minutes. Decommission deletes the offshore originals once their copy is verified.';
     clearTimeout(mgTimer);mgTimer=setTimeout(refreshMig,(dbRun||ecRun)?3000:15000);
   }).catch(function(){$('mig').style.display='none'});
 }

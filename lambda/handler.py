@@ -14,6 +14,8 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from codeview import Call
+
 R, B, K = os.environ['APPROVED_REGION'], os.environ['BUCKET'], os.environ['KEY_ARN']
 P, T, ACCT = os.environ['PREFIX'], os.environ['TOPIC_ARN'], os.environ['ACCOUNT_ID']
 TOKEN = os.environ.get('API_TOKEN', '')  # empty = open demo; set var.api_token to require ?t=<token>
@@ -27,23 +29,39 @@ def cl(svc, region=R, **kw):
     return boto3.client(svc, region_name=region, config=CFG, **kw)
 
 
-def res(verdict, cmd, detail):
-    return {'verdict': verdict, 'who': 'public probe role', 'cmd': cmd, 'detail': str(detail).replace(ACCT, '************')[:600]}
+ROLE = f'{P}-probe-lambda'  # the IAM role this Lambda runs as (deny policies attached)
 
 
-def attempt(cmd, fn, ok='Request succeeded.'):
+def mask(s):
+    return str(s).replace(ACCT, '************')
+
+
+def res(verdict, cmd, detail, call=None, extra_py='', extra_cli=''):
+    r = {'verdict': verdict, 'who': 'public probe role', 'cmd': cmd, 'detail': mask(detail)[:600],
+         'role': ROLE, 'source': 'lambda/handler.py'}
+    if call is not None:  # the exact call that ran, as Python and as the AWS CLI equivalent
+        r['code'] = mask(call.code() + extra_py)
+        r['cli'] = mask(call.cli() + extra_cli)
+    return r
+
+
+def attempt(cmd, call, ok='Request succeeded.'):
     try:
-        fn()
-        return res('allowed', cmd, ok)
+        call()
+        return res('allowed', cmd, ok, call)
     except ClientError as e:
         c = e.response.get('Error', {})
         code, msg = c.get('Code', ''), c.get('Message', '')
         if code == 'DryRunOperation':
-            return res('allowed', cmd, 'DryRunOperation: the request would have succeeded (nothing was created).')
+            return res('allowed', cmd, 'DryRunOperation: the request would have succeeded (nothing was created).', call)
         denied = code in ('AccessDenied', 'UnauthorizedOperation', 'AccessDeniedException') or 'explicit deny' in msg
-        return res('denied' if denied else 'error', cmd, f'{code}: {msg}')
+        return res('denied' if denied else 'error', cmd, f'{code}: {msg}', call)
     except Exception as e:  # network, validation, etc.
-        return res('error', cmd, f'{type(e).__name__}: {e}')
+        return res('error', cmd, f'{type(e).__name__}: {e}', call)
+
+
+def C(svc, op, region=R, **kw):
+    return Call(svc, region, op, config=CFG, **kw)
 
 
 def probe(p):
@@ -51,21 +69,24 @@ def probe(p):
     if r not in REGIONS:
         raise ValueError('unknown region')
     if s == 'ec2':
-        return attempt(f'ec2:CreateVpc (dry run) in {r}', lambda: cl('ec2', r).create_vpc(CidrBlock='10.99.0.0/16', DryRun=True))
+        return attempt(f'ec2:CreateVpc (dry run) in {r}', C('ec2', 'create_vpc', r, CidrBlock='10.99.0.0/16', DryRun=True))
     if s == 'kms':
-        return attempt(f'kms:ListKeys in {r}', lambda: cl('kms', r).list_keys(Limit=1))
+        return attempt(f'kms:ListKeys in {r}', C('kms', 'list_keys', r, Limit=1))
     if s == 'lambda':
-        return attempt(f'lambda:ListFunctions in {r}', lambda: cl('lambda', r).list_functions(MaxItems=1))
+        return attempt(f'lambda:ListFunctions in {r}', C('lambda', 'list_functions', r, MaxItems=1))
     if s == 'rds':
-        return attempt(f'rds:DescribeDBInstances in {r}', lambda: cl('rds', r).describe_db_instances(MaxRecords=20))
+        return attempt(f'rds:DescribeDBInstances in {r}', C('rds', 'describe_db_instances', r, MaxRecords=20))
     if s == 's3':
         name = f'{P}-probe-{ACCT}-{secrets.token_hex(3)}'
         kw = {} if r == 'us-east-1' else {'CreateBucketConfiguration': {'LocationConstraint': r}}
-        c = cl('s3', r)
-        out = attempt(f's3:CreateBucket in {r}', lambda: c.create_bucket(Bucket=name, **kw))
+        create = C('s3', 'create_bucket', r, Bucket=name, **kw)
+        out = attempt(f's3:CreateBucket in {r}', create)
         if out['verdict'] == 'allowed':
-            attempt('s3:DeleteBucket', lambda: c.delete_bucket(Bucket=name))
+            delete = C('s3', 'delete_bucket', r, Bucket=name)
+            attempt('s3:DeleteBucket', delete)
             out['detail'] = 'Bucket created, then deleted again.'
+            out['code'] = mask(create.code() + '\n# allowed, so clean up straight away:\n' + delete.code().split('\n', 1)[1])
+            out['cli'] = mask(create.cli() + '\n# allowed, so clean up straight away:\n' + delete.cli())
         return out
     raise ValueError('unknown service')
 
@@ -76,10 +97,9 @@ def act(p):
         return probe(p)
     key = f'tests/{a}-{int(time.time())}.json'
     body = json.dumps({'receipt_id': a, 'note': 'SIMULATED DATA'}).encode()
-    s3 = cl('s3')
 
-    def put(client=s3, **kw):
-        return lambda: client.put_object(Bucket=B, Key=key, Body=body, **kw)
+    def put(endpoint=None, **kw):
+        return Call('s3', R, 'put_object', endpoint=endpoint, config=CFG, Bucket=B, Key=key, Body=body, **kw)
 
     if a == 'upOk':
         return attempt('s3:PutObject, SSE-KMS with our key', put(ServerSideEncryption='aws:kms', SSEKMSKeyId=K))
@@ -90,16 +110,15 @@ def act(p):
     if a == 'upHttp':
         # No encryption headers: S3 rejects any SSE-KMS request over HTTP before the bucket policy
         # is evaluated, which would hide the DenyNonTLS statement. The bucket default applies our key.
-        http = boto3.client('s3', region_name=R, config=CFG, endpoint_url=f'http://s3.{R}.amazonaws.com')
-        return attempt('s3:PutObject over plain HTTP', put(http))
+        return attempt('s3:PutObject over plain HTTP', put(endpoint=f'http://s3.{R}.amazonaws.com'))
     if a == 'repl':
         rc = {'Role': f'arn:aws:iam::{ACCT}:role/dummy-replication-role', 'Rules': [{
             'ID': 'offshore', 'Status': 'Enabled', 'Priority': 1, 'Filter': {},
             'DeleteMarkerReplication': {'Status': 'Disabled'},
             'Destination': {'Bucket': 'arn:aws:s3:::dummy-destination-bucket'}}]}
-        return attempt('s3:PutBucketReplication to another bucket', lambda: s3.put_bucket_replication(Bucket=B, ReplicationConfiguration=rc))
+        return attempt('s3:PutBucketReplication to another bucket', C('s3', 'put_bucket_replication', Bucket=B, ReplicationConfiguration=rc))
     if a == 'mrk':
-        return attempt('kms:CreateKey (multi-Region)', lambda: cl('kms').create_key(MultiRegion=True))
+        return attempt('kms:CreateKey (multi-Region)', C('kms', 'create_key', MultiRegion=True))
     raise ValueError('unknown action')
 
 

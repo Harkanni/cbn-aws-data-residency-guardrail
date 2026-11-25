@@ -8,6 +8,9 @@
 # The migration is run from the local console by a dedicated "migrator" role whose policy says:
 # reads from the legacy region are allowed, every other action must target the approved region.
 # So data can move IN, but any attempt to move it OUT (or to write anywhere else) is denied.
+# After the copy is verified, the console can DECOMMISSION the offshore originals (delete the table,
+# terminate the server, deregister its image, delete the snapshot), as the CBN FAQ expects: no copies
+# left abroad. Terraform recreates the legacy side on the next apply, so ./deploy.sh fix replays the demo.
 # The migration itself (copy image, launch instance, copy records) is created at run time by the
 # console, not by Terraform. Click Reset in the console before `./deploy.sh destroy`.
 #
@@ -105,27 +108,40 @@ resource "aws_dynamodb_table" "migrated" {
 
 # --------------------------- Inbound-only migrator --------------------------
 
-# Same global-service exemptions as the region lock, plus READ-ONLY legacy-region actions.
-# Everything else that targets another region is denied, so nothing can be written outside.
+# Inbound-only migration, in two explicit denies (explicit denies beat AdministratorAccess):
+#   1. Outside the approved AND legacy regions, nothing at all (global services aside).
+#   2. In the legacy region: reads, so data can be copied IN, plus four delete-only actions so the
+#      offshore originals can be decommissioned after the copy is verified. Nothing that writes data
+#      offshore is allowed (no PutItem, BatchWriteItem, CopyImage or CreateSnapshot), so data cannot leave.
+locals {
+  global_not_actions = jsondecode(aws_iam_policy.region_lock.policy).Statement[0].NotAction
+  legacy_reads = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable",
+  "ec2:DescribeImages", "ec2:DescribeSnapshots", "ec2:DescribeInstances"]
+  legacy_decommission = ["dynamodb:DeleteTable", "ec2:TerminateInstances", "ec2:DeregisterImage", "ec2:DeleteSnapshot"]
+}
+
 resource "aws_iam_policy" "inbound_only" {
   name        = "${var.name_prefix}-inbound-only-migration"
-  description = "Reads from the legacy region are allowed; all writes must target ${var.approved_region}"
+  description = "Writes only in ${var.approved_region}; in ${var.legacy_region} only reads and decommission deletes"
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid    = "DenyAllOutsideApprovedRegionExceptLegacyReads"
-      Effect = "Deny"
-      NotAction = concat(
-        jsondecode(aws_iam_policy.region_lock.policy).Statement[0].NotAction,
-        [
-          "dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable",
-          "ec2:DescribeImages", "ec2:DescribeSnapshots", "ec2:DescribeInstances"
-        ]
-      )
-      Resource  = "*"
-      Condition = jsondecode(aws_iam_policy.region_lock.policy).Statement[0].Condition
-    }]
+    Statement = [
+      {
+        Sid       = "DenyAllOutsideApprovedAndLegacyRegions"
+        Effect    = "Deny"
+        NotAction = local.global_not_actions
+        Resource  = "*"
+        Condition = { StringNotEquals = { "aws:RequestedRegion" = [var.approved_region, var.legacy_region] } }
+      },
+      {
+        Sid       = "LegacyRegionReadAndDecommissionOnly"
+        Effect    = "Deny"
+        NotAction = concat(local.global_not_actions, local.legacy_reads, local.legacy_decommission)
+        Resource  = "*"
+        Condition = { StringEquals = { "aws:RequestedRegion" = var.legacy_region } }
+      }
+    ]
   })
 }
 
@@ -173,4 +189,8 @@ output "mig_dest_table" {
 
 output "mig_legacy_ami" {
   value = aws_ami_from_instance.legacy.id
+}
+
+output "mig_legacy_instance" {
+  value = aws_instance.legacy.id
 }
